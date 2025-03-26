@@ -162,7 +162,7 @@ export default function ConfigurationPanel({
                 <SelectContent>
                   {bundles.map((bundle) => (
                     <SelectItem key={bundle.id} value={bundle.id}>
-                      {bundle.name} ({bundle.displayPrice})
+                      {bundle.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
