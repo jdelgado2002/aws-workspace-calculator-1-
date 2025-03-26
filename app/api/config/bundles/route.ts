@@ -51,42 +51,6 @@ function extractBundleSpecs(bundleDescription: string) {
   };
 }
 
-// Function to estimate price based on specs
-function estimateBundlePrice(specs: any, runningMode: string) {
-  if (runningMode === "AutoStop") {
-    // For AutoStop, we calculate hourly rates but return a monthly estimate
-    // based on typical usage patterns (e.g., 160 hours per month)
-    let baseHourlyRate = 0;
-    
-    if (specs.gpu) {
-      baseHourlyRate = specs.vCPU > 8 ? 1.5 : 0.8;
-    } else {
-      if (specs.vCPU <= 2) {
-        baseHourlyRate = specs.memory <= 4 ? 0.3 : 0.4;
-      } else if (specs.vCPU <= 4) {
-        baseHourlyRate = 0.6;
-      } else {
-        baseHourlyRate = 1.0;
-      }
-    }
-    
-    return Math.round(baseHourlyRate * 160); // Assume 160 hours of usage per month
-  } else {
-    // For AlwaysOn, we use a monthly rate
-    if (specs.gpu) {
-      return specs.vCPU > 8 ? 350 : 220;
-    } else {
-      if (specs.vCPU <= 1) return 21;
-      if (specs.vCPU <= 2 && specs.memory <= 4) return 35;
-      if (specs.vCPU <= 2) return 60;
-      if (specs.vCPU <= 4) return 80;
-      if (specs.vCPU <= 8) return 124;
-      if (specs.vCPU <= 16) return 250;
-      return 500;
-    }
-  }
-}
-
 export async function GET(request: Request) {
   try {
     // Get region from query parameter
@@ -163,18 +127,20 @@ export async function GET(request: Request) {
       );
       
       if (bundlesResponse && bundlesResponse.aggregations) {
-        // Extract unique bundle descriptions
+        // Extract unique bundle descriptions and store full configs
         const uniqueBundles = new Set();
         const uniqueRootVolumes = new Set();
         const uniqueUserVolumes = new Set();
         const uniqueOS = new Set();
         const uniqueLicenses = new Set();
+        const bundleConfigs = []; // Store full configurations for price lookup
         
         bundlesResponse.aggregations.forEach(item => {
           if (item.selectors) {
             // Extract bundle descriptions
             if (item.selectors["Bundle Description"]) {
               uniqueBundles.add(item.selectors["Bundle Description"]);
+              bundleConfigs.push(item.selectors); // Save full config for price lookup
             }
             
             // Extract volume options
@@ -197,18 +163,112 @@ export async function GET(request: Request) {
           }
         });
         
-        // Convert bundle descriptions to our bundle format
+        // Fetch actual prices for bundles from AWS API
+        const bundlePrices = new Map(); // Map to store bundle prices
+        
+        // Fetch prices for each unique bundle configuration
+        for (const config of bundleConfigs) {
+          try {
+            const bundleDesc = config["Bundle Description"];
+            
+            // If we've already priced this bundle, skip
+            if (bundlePrices.has(bundleDesc)) continue;
+            
+            // Construct the pricing URL to get actual prices
+            const urlParams = [
+              encodedRegion,
+              encodeURIComponent(config["Bundle Description"]),
+              encodeURIComponent(config.rootVolume),
+              encodeURIComponent(config.userVolume),
+              encodeURIComponent(config["Operating System"]),
+              encodeURIComponent(config.License),
+              encodeURIComponent(config["Running Mode"]),
+              encodeURIComponent(config["Product Family"])
+            ];
+            
+            const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${urlParams.join('/')}/index.json`;
+            
+            console.log(`Fetching pricing from URL: ${pricingUrl}`);
+            
+            const pricingData = await fetchAwsPricingData(
+              pricingUrl,
+              `Failed to fetch pricing for ${bundleDesc} in ${regionName}`
+            );
+            
+            if (pricingData && pricingData.regions && pricingData.regions[regionName]) {
+              // Calculate total price for this bundle
+              const regionData = pricingData.regions[regionName];
+              let totalPrice = 0;
+              let hourlyPrice = 0;
+              
+              // Extract the pricing information
+              for (const [key, priceInfo] of Object.entries(regionData)) {
+                const info = priceInfo as any;
+                const price = parseFloat(info.price);
+                
+                // Check if this is hourly or monthly
+                if (config["Running Mode"] === "AutoStop") {
+                  hourlyPrice += price;
+                } else {
+                  totalPrice += price;
+                }
+              }
+              
+              // Store the price for this bundle
+              bundlePrices.set(bundleDesc, {
+                alwaysOn: totalPrice,
+                autoStop: hourlyPrice,
+                // Calculate hourly cost for AutoStop
+                autoStopMonthly: hourlyPrice * 160, // Assuming 160 hours per month
+                // Add config info for debugging
+                config: {
+                  rootVolume: config.rootVolume,
+                  userVolume: config.userVolume,
+                  operatingSystem: config["Operating System"],
+                  license: config.License,
+                  runningMode: config["Running Mode"],
+                }
+              });
+              
+              console.log(`Fetched real price for ${bundleDesc}: AlwaysOn=$${totalPrice}, AutoStop=$${hourlyPrice}/hr`);
+            }
+          } catch (error) {
+            console.error(`Error fetching price for bundle ${config["Bundle Description"]}:`, error);
+            // Continue with next bundle
+          }
+        }
+        
+        // Debug output to verify pricing
+        console.log("All bundle prices:");
+        bundlePrices.forEach((price, bundleDesc) => {
+          console.log(`${bundleDesc}: $${price.alwaysOn}/mo, $${price.autoStop}/hr`);
+        });
+        
+        // Convert bundle descriptions to our bundle format with real prices
         bundles = Array.from(uniqueBundles).map(description => {
           const bundleSpecs = extractBundleSpecs(description as string);
           const bundleId = bundleSpecs.type.toLowerCase().replace(/\./g, '-');
           
+          // Get real prices if available, or use fallback
+          const priceData = bundlePrices.get(description as string);
+          
+          // Important: use the EXACT price from the API, with no rounding or formatting
+          const price = priceData ? priceData.alwaysOn : getFallbackPrice(bundleSpecs, "AlwaysOn");
+          const hourlyPrice = priceData ? priceData.autoStop : getFallbackPrice(bundleSpecs, "AutoStop") / 160;
+          const autoStopMonthlyPrice = priceData ? priceData.autoStopMonthly : getFallbackPrice(bundleSpecs, "AutoStop");
+          
           return {
             id: bundleId,
             name: description as string,
-            // Estimate price - in a real app, we would fetch actual prices
-            price: estimateBundlePrice(bundleSpecs, "AlwaysOn"),
-            hourlyPrice: estimateBundlePrice(bundleSpecs, "AutoStop") / 160, // Approximate hourly rate
+            price: price, // Store exact price
+            displayPrice: `$${price.toFixed(2)}/mo`, // Format for display
+            hourlyPrice: hourlyPrice,
+            displayHourlyPrice: `$${hourlyPrice.toFixed(3)}/hr`,
+            autoStopMonthlyPrice: autoStopMonthlyPrice,
             specs: bundleSpecs,
+            pricingSource: priceData ? "aws-api" : "estimated",
+            // Include the config used for this price
+            pricingConfig: priceData ? priceData.config : null,
           };
         });
         
@@ -273,5 +333,39 @@ export async function GET(request: Request) {
     return NextResponse.json({ 
       error: `Failed to fetch bundle options: ${errorMessage}` 
     }, { status: 500 });
+  }
+}
+
+// Fallback function for price estimation when API pricing is unavailable
+function getFallbackPrice(specs: any, runningMode: string) {
+  // Same implementation as in options/route.ts
+  if (runningMode === "AutoStop") {
+    let baseHourlyRate = 0;
+    
+    if (specs.gpu) {
+      baseHourlyRate = specs.vCPU > 8 ? 1.5 : 0.8;
+    } else {
+      if (specs.vCPU <= 2) {
+        baseHourlyRate = specs.memory <= 4 ? 0.3 : 0.4;
+      } else if (specs.vCPU <= 4) {
+        baseHourlyRate = 0.6;
+      } else {
+        baseHourlyRate = 1.0;
+      }
+    }
+    
+    return Math.round(baseHourlyRate * 160);
+  } else {
+    if (specs.gpu) {
+      return specs.vCPU > 8 ? 350 : 220;
+    } else {
+      if (specs.vCPU <= 1) return 21;
+      if (specs.vCPU <= 2 && specs.memory <= 4) return 35;
+      if (specs.vCPU <= 2) return 60;
+      if (specs.vCPU <= 4) return 80;
+      if (specs.vCPU <= 8) return 124;
+      if (specs.vCPU <= 16) return 250;
+      return 500;
+    }
   }
 }
