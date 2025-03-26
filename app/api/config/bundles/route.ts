@@ -52,7 +52,6 @@ function extractBundleSpecs(bundleDescription: string) {
 }
 
 // Function to estimate price based on specs
-// This is just a placeholder as real pricing would come from AWS pricing API
 function estimateBundlePrice(specs: any, runningMode: string) {
   if (runningMode === "AutoStop") {
     // For AutoStop, we calculate hourly rates but return a monthly estimate
@@ -88,85 +87,17 @@ function estimateBundlePrice(specs: any, runningMode: string) {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // Fetch WorkSpaces Core metadata to get accurate region information
-    let regions = [];
-    let defaultRegion = "US West (Oregon)"; // Default region to use
+    // Get region from query parameter
+    const { searchParams } = new URL(request.url);
+    const region = searchParams.get('region');
     
-    try {
-      const metadataResponse = await fetchAwsPricingData(
-        'https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/metadata.json',
-        'Failed to fetch WorkSpaces Core metadata'
-      );
-      
-      // Extract region information from the metadata
-      if (metadataResponse && metadataResponse.valueAttributes && metadataResponse.valueAttributes.Location) {
-        regions = metadataResponse.valueAttributes.Location.map(regionName => {
-          // Create a mapping from AWS region name to region code
-          let value = "";
-          
-          if (regionName.includes("GovCloud")) {
-            value = regionName.includes("US-East") ? "us-gov-east-1" : "us-gov-west-1";
-          } else if (regionName.includes("US East")) {
-            value = "us-east-1";
-          } else if (regionName.includes("US West")) {
-            value = "us-west-2";
-          } else if (regionName.includes("EU (Ireland)")) {
-            value = "eu-west-1";
-          } else if (regionName.includes("EU (London)")) {
-            value = "eu-west-2";
-          } else if (regionName.includes("EU (Frankfurt)")) {
-            value = "eu-central-1";
-          } else if (regionName.includes("Asia Pacific (Tokyo)")) {
-            value = "ap-northeast-1";
-          } else if (regionName.includes("Asia Pacific (Seoul)")) {
-            value = "ap-northeast-2";
-          } else if (regionName.includes("Asia Pacific (Mumbai)")) {
-            value = "ap-south-1";
-          } else if (regionName.includes("Asia Pacific (Singapore)")) {
-            value = "ap-southeast-1";
-          } else if (regionName.includes("Asia Pacific (Sydney)")) {
-            value = "ap-southeast-2";
-          } else if (regionName.includes("Canada")) {
-            value = "ca-central-1";
-          } else if (regionName.includes("South America")) {
-            value = "sa-east-1";
-          } else if (regionName.includes("Israel")) {
-            value = "il-central-1";
-          } else {
-            // For any unrecognized region, create a slug version of the name
-            value = regionName
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, '-')
-              .replace(/^-|-$/g, '');
-          }
-          
-          return {
-            value, // Our internal region code
-            label: regionName,
-            originalName: regionName // Keep the exact original name for API calls
-          };
-        });
-        
-        // Set default region to the first one in the list
-        if (regions.length > 0) {
-          defaultRegion = regions[0].originalName;
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching regions from metadata:", error);
-      // Fall back to default regions with proper original names
-      regions = [
-        { value: "us-east-1", label: "US East (N. Virginia)", originalName: "US East (N. Virginia)" },
-        { value: "us-west-2", label: "US West (Oregon)", originalName: "US West (Oregon)" },
-        { value: "eu-west-1", label: "EU (Ireland)", originalName: "EU (Ireland)" },
-        { value: "ap-northeast-1", label: "Asia Pacific (Tokyo)", originalName: "Asia Pacific (Tokyo)" },
-        { value: "ap-southeast-2", label: "Asia Pacific (Sydney)", originalName: "Asia Pacific (Sydney)" },
-      ];
+    if (!region) {
+      return NextResponse.json({ error: "Region parameter is required" }, { status: 400 });
     }
-
-    // Fetch bundle information for the default region
+    
+    // Fetch bundle information for the specified region
     let bundles = [];
     let rootVolumeOptions = [];
     let userVolumeOptions = [];
@@ -174,13 +105,61 @@ export async function GET() {
     let licenseOptions = [];
     
     try {
-      // URL encode the region name for the API call - use originalName
-      const encodedRegion = encodeURIComponent(defaultRegion);
-      console.log(`Fetching bundles for region: ${defaultRegion}, encoded as: ${encodedRegion}`);
+      // First fetch metadata to get the original region name format
+      const metadataResponse = await fetchAwsPricingData(
+        'https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/metadata.json',
+        'Failed to fetch WorkSpaces Core metadata'
+      );
+      
+      // Find the original region name from the metadata or use the provided region as-is
+      let regionName = region;
+      if (metadataResponse && metadataResponse.valueAttributes && metadataResponse.valueAttributes.Location) {
+        // First try to find by exact match to our region codes
+        const foundRegion = metadataResponse.valueAttributes.Location.find(name => {
+          // Convert both to lowercase for case-insensitive comparison
+          return name.toLowerCase() === region.toLowerCase();
+        });
+        
+        if (foundRegion) {
+          regionName = foundRegion;
+        } else {
+          // If no exact match, try to match by parts of the region name
+          const possibleMatch = metadataResponse.valueAttributes.Location.find(name => {
+            // Create a simplified version of both strings for matching
+            const simplifiedName = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const simplifiedRegion = region.toLowerCase().replace(/[^a-z0-9]+/g, '');
+            
+            return simplifiedName.includes(simplifiedRegion) || simplifiedRegion.includes(simplifiedName);
+          });
+          
+          if (possibleMatch) {
+            regionName = possibleMatch;
+          }
+          
+          // If all else fails, map common region codes to full names
+          if (regionName === region) {
+            const regionMap = {
+              'us-east-1': 'US East (N. Virginia)',
+              'us-west-2': 'US West (Oregon)',
+              'eu-west-1': 'EU (Ireland)',
+              'ap-northeast-1': 'Asia Pacific (Tokyo)',
+              'ap-southeast-2': 'Asia Pacific (Sydney)',
+              'us-gov-east-1': 'AWS GovCloud (US-East)',
+              'us-gov-west-1': 'AWS GovCloud (US)'
+            };
+            
+            regionName = regionMap[region] || region;
+          }
+        }
+      }
+      
+      // URL encode the region name for the API call
+      const encodedRegion = encodeURIComponent(regionName);
+      console.log(`Fetching bundles for region: ${regionName}, encoded as: ${encodedRegion}`);
       
       const bundlesResponse = await fetchAwsPricingData(
         `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${encodedRegion}/primary-selector-aggregations.json`,
-        'Failed to fetch WorkSpaces bundles'
+        `Failed to fetch WorkSpaces bundles for region: ${regionName}`
       );
       
       if (bundlesResponse && bundlesResponse.aggregations) {
@@ -265,133 +244,34 @@ export async function GET() {
         }));
       }
     } catch (error) {
-      console.error("Error parsing bundles:", error);
+      console.error(`Error parsing bundles for region ${region}:`, error);
     }
 
-    // If no bundles were extracted, use fallback bundles
+    // If no bundles were extracted, return an error
     if (bundles.length === 0) {
-      bundles = [
-        {
-          id: "value",
-          name: "Value (1 vCPU, 2GB RAM)",
-          price: 21,
-          hourlyPrice: 0.26,
-          specs: {
-            type: "Value",
-            vCPU: 1,
-            memory: 2,
-            storage: 80,
-            graphics: "Standard",
-          },
-        },
-        {
-          id: "standard",
-          name: "Standard (2 vCPU, 4GB RAM)",
-          price: 35,
-          hourlyPrice: 0.43,
-          specs: {
-            type: "Standard",
-            vCPU: 2,
-            memory: 4,
-            storage: 80,
-            graphics: "Standard",
-          },
-        },
-        {
-          id: "performance",
-          name: "Performance (2 vCPU, 8GB RAM)",
-          price: 60,
-          hourlyPrice: 0.57,
-          specs: {
-            type: "Performance",
-            vCPU: 2,
-            memory: 8,
-            storage: 100,
-            graphics: "Standard",
-          },
-        },
-        {
-          id: "power",
-          name: "Power (4 vCPU, 16GB RAM)",
-          price: 80,
-          hourlyPrice: 0.82,
-          specs: {
-            type: "Power",
-            vCPU: 4,
-            memory: 16,
-            storage: 175,
-            graphics: "High Performance",
-          },
-        },
-      ];
+      return NextResponse.json({ 
+        error: `No bundles found for region: ${region}` 
+      }, { status: 404 });
     }
-
-    // If no root volume options were extracted, use fallback options
-    if (rootVolumeOptions.length === 0) {
-      rootVolumeOptions = [
-        { value: "80", label: "80 GB" },
-        { value: "175", label: "175 GB" },
-      ];
-    }
-
-    // If no user volume options were extracted, use fallback options
-    if (userVolumeOptions.length === 0) {
-      userVolumeOptions = [
-        { value: "10", label: "10 GB" },
-        { value: "50", label: "50 GB" },
-        { value: "100", label: "100 GB" },
-      ];
-    }
-
-    // If no operating systems were extracted, use fallback options
-    if (operatingSystems.length === 0) {
-      operatingSystems = [
-        { value: "windows", label: "Windows" },
-        { value: "amazon-linux", label: "Amazon Linux" },
-        { value: "ubuntu", label: "Ubuntu" },
-      ];
-    }
-
-    // If no license options were extracted, use fallback options
-    if (licenseOptions.length === 0) {
-      licenseOptions = [
-        { value: "included", label: "Included" },
-        { value: "byol", label: "Bring Your Own License" },
-      ];
-    }
-
-    // Extract running modes
-    const runningModes = [
-      { value: "always-on", label: "AlwaysOn" },
-      { value: "auto-stop", label: "AutoStop" },
-    ];
-
-    // Extract billing options
-    const billingOptions = [
-      { value: "monthly", label: "Monthly" },
-      { value: "hourly", label: "Hourly" },
-    ];
 
     return NextResponse.json({
-      regions,
       bundles,
-      operatingSystems,
-      runningModes,
-      billingOptions,
       storage: {
         rootVolume: rootVolumeOptions,
         userVolume: userVolumeOptions,
       },
+      operatingSystems,
       licenseOptions,
-      apiSource: "AWS Public Pricing API",
+      region,
     });
   } catch (error) {
-    console.error("Error fetching configuration options:", error);
+    console.error("Error fetching bundle options:", error);
 
     // Return a friendly error message
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
-    return NextResponse.json({ error: `Failed to fetch configuration options: ${errorMessage}` }, { status: 500 });
+    return NextResponse.json({ 
+      error: `Failed to fetch bundle options: ${errorMessage}` 
+    }, { status: 500 });
   }
 }
-
