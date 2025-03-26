@@ -24,18 +24,48 @@ async function fetchAwsPricingData(url: string, errorMessage: string) {
   }
 }
 
+// Define a direct storage parsing function that we can use in multiple places
+function parseStorageSize(volumeString?: string): number {
+  if (!volumeString) return 0;
+  
+  // Extract just the numbers from the string (e.g., "100 GB" -> 100)
+  const numMatch = volumeString.match(/(\d+)/);
+  return numMatch ? parseInt(numMatch[1], 10) : 0;
+}
+
 // Function to extract bundle specs from the bundle description
-function extractBundleSpecs(bundleDescription: string) {
+function extractBundleSpecs(bundleDescription: string, rootVolume?: string, userVolume?: string) {
   // Regular expression to parse the bundle description
   const regex = /^([\w\.]+) \((\d+) vCPU, (\d+)GB RAM(?:, (\d+) GPU, (\d+)GB Video Memory)?\)$/;
   const match = bundleDescription.match(regex);
+  
+  // Directly calculate total storage - simplify the parsing to make it more robust
+  let rootSize = 0;
+  let userSize = 0;
+  
+  // Parse root volume
+  if (rootVolume) {
+    rootSize = parseStorageSize(rootVolume);
+    console.log(`Root volume: ${rootVolume} -> ${rootSize} GB`);
+  }
+  
+  // Parse user volume
+  if (userVolume) {
+    userSize = parseStorageSize(userVolume);
+    console.log(`User volume: ${userVolume} -> ${userSize} GB`);
+  }
+  
+  // Total storage is the sum, with a fallback
+  const totalStorage = (rootSize + userSize) > 0 ? (rootSize + userSize) : 80;
+  
+  console.log(`FINAL STORAGE for ${bundleDescription}: ${totalStorage} GB (Root: ${rootSize} GB, User: ${userSize} GB)`);
   
   if (!match) {
     return {
       type: bundleDescription,
       vCPU: 2,
       memory: 8,
-      storage: 80,
+      storage: totalStorage,
       graphics: "Standard",
     };
   }
@@ -46,7 +76,7 @@ function extractBundleSpecs(bundleDescription: string) {
     type: match[1],
     vCPU: parseInt(match[2], 10),
     memory: parseInt(match[3], 10),
-    storage: 80, // Default, will be updated with actual volumes
+    storage: totalStorage,
     graphics: hasGPU ? "High Performance" : "Standard",
     ...(hasGPU && { gpu: true, gpuCount: parseInt(match[4], 10), videoMemory: parseInt(match[5], 10) }),
   };
@@ -250,13 +280,43 @@ export async function GET(request: Request) {
         
         // Convert bundle descriptions to our bundle format with real prices for this region
         bundles = Array.from(uniqueBundles).map(description => {
-          const bundleSpecs = extractBundleSpecs(description as string);
-          const bundleId = bundleSpecs.type.toLowerCase().replace(/\./g, '-');
-          
-          // Get real prices if available, or use fallback
           const priceData = bundlePrices.get(description as string);
           
-          // Important: use the EXACT price from the API for this region
+          // Print the full price data for debugging
+          console.log(`Price data for ${description}:`, JSON.stringify(priceData));
+          
+          // Extract the root and user volumes directly from the pricing configuration
+          let rootVolume = null;
+          let userVolume = null;
+          
+          if (priceData && priceData.config) {
+            rootVolume = priceData.config.rootVolume;
+            userVolume = priceData.config.userVolume;
+            console.log(`Volume info for ${description}: Root=${rootVolume}, User=${userVolume}`);
+          } else {
+            console.log(`No config data available for ${description}`);
+          }
+
+          // Create bundle specs with volume information
+          const bundleSpecs = extractBundleSpecs(
+            description as string,
+            rootVolume,
+            userVolume
+          );
+          
+          // Log the final storage value that will be displayed
+          console.log(`STORAGE VALUE for ${description}: ${bundleSpecs.storage} GB`);
+          
+          const bundleId = bundleSpecs.type.toLowerCase().replace(/\./g, '-');
+          
+          // Log the resulting specs to confirm storage value
+          console.log(`Bundle Specs Debug - ${description as string}:`, {
+            storage: bundleSpecs.storage,
+            vCPU: bundleSpecs.vCPU,
+            memory: bundleSpecs.memory
+          });
+          
+          // Get real prices if available, or use fallback
           const rawPrice = priceData ? priceData.alwaysOn : getFallbackPrice(bundleSpecs, "AlwaysOn");
           const rawHourlyPrice = priceData ? priceData.autoStop : getFallbackPrice(bundleSpecs, "AutoStop") / 160;
           const rawAutoStopMonthlyPrice = priceData ? priceData.autoStopMonthly : getFallbackPrice(bundleSpecs, "AutoStop");

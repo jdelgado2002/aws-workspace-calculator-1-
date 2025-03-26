@@ -120,18 +120,40 @@ function getBundleName(bundleId: string) {
   return 'Custom Bundle';
 }
 
+// Ensure storage volumes are properly accounted for in pricing estimates
 export async function POST(request: Request) {
   try {
     const config: WorkSpaceConfig = await request.json()
+    
+    // Log the incoming config to debug storage values
+    console.log("INCOMING CONFIG:", {
+      bundleId: config.bundleId,
+      rootVolume: config.rootVolume,
+      userVolume: config.userVolume,
+      operatingSystem: config.operatingSystem, // Log the OS to debug
+      bundleSpecs: config.bundleSpecs
+    });
 
     // Initialize variables for pricing
     let baseCost = 0
     let bundleName = ""
     let pricingSource = "calculated" // Track if we're using AWS pricing or calculated pricing
+    let selectedRootVolume = null; // Will store the selected root volume from API
+    let selectedUserVolume = null; // Will store the selected user volume from API
 
     // Convert region code to AWS region name for API calls
     const regionName = getOriginalRegionName(config.region);
     console.log(`Using region name for API call: ${regionName}`);
+    
+    // Convert operating system value for the API
+    // The API expects "Windows" or "Any" (for BYOL)
+    const apiOperatingSystem = config.operatingSystem === 'windows' ? 'Windows' : 'Any';
+    
+    // Convert license value for the API
+    // The API expects "Included" or "Bring Your Own License"
+    const apiLicense = apiOperatingSystem === 'Windows' ? 'Included' : 'Bring Your Own License';
+    
+    console.log(`Using operating system: ${apiOperatingSystem}, license: ${apiLicense}`);
     
     // Try to get direct pricing information from AWS Pricing API
     try {
@@ -229,20 +251,29 @@ export async function POST(request: Request) {
           // Now find a specific configuration that exists in the API
           let selectedConfig = null;
           
-          // Find an exact match if possible
+          // Try to find a configuration that matches our exact OS and license preferences
           for (const item of aggregationData.aggregations) {
-            if (item.selectors && item.selectors["Bundle Description"] === matchingBundle) {
+            if (item.selectors && 
+                item.selectors["Bundle Description"] === matchingBundle &&
+                item.selectors["Operating System"] === apiOperatingSystem &&
+                item.selectors.License === apiLicense) {
               // We've found an exact match, use this configuration
               selectedConfig = item.selectors;
+              selectedRootVolume = selectedConfig.rootVolume;
+              selectedUserVolume = selectedConfig.userVolume;
+              console.log(`Found exact match with OS=${apiOperatingSystem}, License=${apiLicense}`);
               break;
             }
           }
           
-          // If no exact match, use the first configuration we found
+          // If no exact match with OS and license, fall back to any matching bundle
           if (!selectedConfig) {
+            console.log(`No exact OS/License match found, using first available config`);
             for (const item of aggregationData.aggregations) {
               if (item.selectors && item.selectors["Bundle Description"] === matchingBundle) {
                 selectedConfig = item.selectors;
+                selectedRootVolume = selectedConfig.rootVolume;
+                selectedUserVolume = selectedConfig.userVolume;
                 break;
               }
             }
@@ -251,17 +282,23 @@ export async function POST(request: Request) {
           if (selectedConfig) {
             console.log("Selected configuration:", selectedConfig);
             
+            // Use the provided OS and license for pricing, not the ones from the selected config
+            const configToUse = {
+              ...selectedConfig,
+              "Operating System": apiOperatingSystem,
+              "License": apiLicense
+            };
+            
             // Construct the pricing URL with exactly the values from the API
-            // This ensures we're using the format AWS expects
             const urlParams = [
               encodedRegion,
-              encodeURIComponent(selectedConfig["Bundle Description"]),
-              encodeURIComponent(selectedConfig.rootVolume),
-              encodeURIComponent(selectedConfig.userVolume),
-              encodeURIComponent(selectedConfig["Operating System"]),
-              encodeURIComponent(selectedConfig.License),
-              encodeURIComponent(selectedConfig["Running Mode"]),
-              encodeURIComponent(selectedConfig["Product Family"])
+              encodeURIComponent(configToUse["Bundle Description"]),
+              encodeURIComponent(configToUse.rootVolume),
+              encodeURIComponent(configToUse.userVolume),
+              encodeURIComponent(configToUse["Operating System"]), // Use our API OS value
+              encodeURIComponent(configToUse.License), // Use our API license value
+              encodeURIComponent(configToUse["Running Mode"]),
+              encodeURIComponent(configToUse["Product Family"])
             ];
             
             const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${urlParams.join('/')}/index.json`;
@@ -343,6 +380,79 @@ export async function POST(request: Request) {
     // Determine billing model display name
     const billingModel = config.billingOption === "monthly" ? "Monthly" : "Hourly";
 
+    // Make sure we properly parse the selectedRootVolume and selectedUserVolume values
+    // from the AWS API to extract the numeric values
+    let apiRootVolume = null;
+    let apiUserVolume = null;
+
+    if (selectedRootVolume) {
+      const match = selectedRootVolume.match(/(\d+)\s*GB/i);
+      if (match) {
+        apiRootVolume = match[1];
+        console.log(`API provided root volume: ${apiRootVolume}GB from "${selectedRootVolume}"`);
+      }
+    }
+
+    if (selectedUserVolume) {
+      const match = selectedUserVolume.match(/(\d+)\s*GB/i);
+      if (match) {
+        apiUserVolume = match[1];
+        console.log(`API provided user volume: ${apiUserVolume}GB from "${selectedUserVolume}"`);
+      }
+    }
+
+    // First use API provided values, then fall back to config values, then default calculation
+    const rootVolume = apiRootVolume || config.rootVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
+    const userVolume = apiUserVolume || config.userVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
+
+    console.log(`FINAL VOLUME CHOICE: Root=${rootVolume}, User=${userVolume} (from config=${config.rootVolume}, from API=${selectedRootVolume})`);
+
+    // Add a helper function to compute total storage
+    function calculateTotalStorage(rootVol: string, userVol: string): number {
+      let total = 0;
+      
+      // Parse root volume size
+      if (rootVol) {
+        const rootMatch = rootVol.match(/(\d+)/);
+        if (rootMatch) {
+          total += parseInt(rootMatch[1], 10);
+        }
+      }
+      
+      // Parse user volume size
+      if (userVol) {
+        const userMatch = userVol.match(/(\d+)/);
+        if (userMatch) {
+          total += parseInt(userMatch[1], 10);
+        }
+      }
+      
+      // Fallback if parsing failed
+      return total > 0 ? total : 80;
+    }
+    
+    // When creating the configuration, ensure volume info is included with the correct values
+    const selectedConfiguration = {
+      'Bundle Description': bundleName,
+      rootVolume: `${rootVolume} GB`,
+      userVolume: `${userVolume} GB`,
+      'Operating System': apiOperatingSystem, // Use the correct API OS value
+      License: apiLicense, // Use the correct API license value
+      'Running Mode': config.runningMode === 'auto-stop' ? 'AutoStop' : 'AlwaysOn',
+      'Product Family': 'WorkSpaces Core'
+    };
+    
+    console.log(`FINAL API CONFIGURATION:`, selectedConfiguration);
+    
+    // When calculating the total storage for display in the response
+    const totalStorage = calculateTotalStorage(
+      selectedConfiguration.rootVolume,
+      selectedConfiguration.userVolume
+    );
+    
+    console.log(`STORAGE CALCULATION: Total=${totalStorage}GB (Root=${selectedConfiguration.rootVolume}, User=${selectedConfiguration.userVolume})`);
+    
+    // When returning the response, explicitly include the actual storage values used
     return NextResponse.json({
       costPerWorkspace,
       totalMonthlyCost,
@@ -351,6 +461,15 @@ export async function POST(request: Request) {
       billingModel,
       baseCost,
       pricingSource,
+      storage: totalStorage,
+      rootVolume: parseInt(rootVolume, 10),
+      userVolume: parseInt(userVolume, 10),
+      // Include the original configuration values for debugging
+      originalConfig: {
+        rootVolume: config.rootVolume,
+        userVolume: config.userVolume,
+        bundleStorage: config.bundleSpecs?.storage,
+      }
     });
     
     // Log the final cost summary
