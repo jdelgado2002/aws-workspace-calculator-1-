@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useDispatch, useSelector } from "react-redux"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -8,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider"
 import { Cpu, MemoryStick, HardDrive, MonitorSmartphone } from "lucide-react"
 import type { WorkSpaceConfig, ConfigOptions } from "@/types/workspace"
+import { loadBundlesForRegion, setSelectedBundle } from "@/lib/store/bundleSlice"
+import type { RootState, AppDispatch } from "@/lib/store"
 
 interface ConfigurationPanelProps {
   config: WorkSpaceConfig
@@ -22,13 +25,52 @@ export default function ConfigurationPanel({
   onConfigChange,
   isLoading,
 }: ConfigurationPanelProps) {
+  // Redux hooks
+  const dispatch = useDispatch<AppDispatch>()
+  const bundleState = useSelector((state: RootState) => state.bundles)
+  
   // Ensure we have valid options
   const regions = configOptions?.regions || []
-  const bundles = configOptions?.bundles || []
   const operatingSystems = configOptions?.operatingSystems || []
   const runningModes = configOptions?.runningModes || []
   const billingOptions = configOptions?.billingOptions || []
   const [activeTab, setActiveTab] = useState("general")
+
+  // Use bundles from Redux state if available, otherwise fall back to configOptions
+  const bundles = bundleState.bundles.length > 0 
+    ? bundleState.bundles 
+    : configOptions?.bundles || []
+
+  // Load bundles when region changes
+  useEffect(() => {
+    if (config.region) {
+      dispatch(loadBundlesForRegion(config.region))
+    }
+  }, [config.region, dispatch])
+
+  // Handle region change
+  const handleRegionChange = (value: string) => {
+    // Update the configuration with the new region
+    onConfigChange({ region: value })
+    
+    // Reset the bundle selection since we're changing regions
+    onConfigChange({ bundleId: '' })
+  }
+
+  // Handle bundle change
+  const handleBundleChange = (value: string) => {
+    dispatch(setSelectedBundle(value))
+    onConfigChange({ bundleId: value })
+    
+    // Find the bundle to get its specs
+    const selectedBundle = bundles.find(bundle => bundle.id === value)
+    if (selectedBundle) {
+      onConfigChange({ 
+        bundleId: value,
+        bundleSpecs: selectedBundle.specs
+      })
+    }
+  }
 
   return (
     <Card className="shadow-sm">
@@ -49,7 +91,7 @@ export default function ConfigurationPanel({
               <Label htmlFor="region">AWS Region</Label>
               <Select
                 value={config.region}
-                onValueChange={(value) => onConfigChange({ region: value })}
+                onValueChange={handleRegionChange}
                 disabled={isLoading}
               >
                 <SelectTrigger id="region" className="w-full">
@@ -69,20 +111,41 @@ export default function ConfigurationPanel({
               <Label htmlFor="bundle">WorkSpace Bundle</Label>
               <Select
                 value={config.bundleId}
-                onValueChange={(value) => onConfigChange({ bundleId: value })}
-                disabled={isLoading}
+                onValueChange={handleBundleChange}
+                disabled={isLoading || bundleState.loading || !config.region}
               >
                 <SelectTrigger id="bundle" className="w-full">
-                  <SelectValue placeholder="Select a bundle" />
+                  <SelectValue placeholder={
+                    bundleState.loading 
+                      ? "Loading bundles..." 
+                      : !config.region 
+                      ? "Select a region first" 
+                      : "Select a bundle"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
-                  {bundles.map((bundle) => (
-                    <SelectItem key={bundle.id} value={bundle.id}>
-                      {bundle.name} (${bundle.price}/mo)
+                  {bundleState.loading ? (
+                    <SelectItem value="loading" disabled>
+                      Loading bundles...
                     </SelectItem>
-                  ))}
+                  ) : bundles.length > 0 ? (
+                    bundles.map((bundle) => (
+                      <SelectItem key={bundle.id} value={bundle.id}>
+                        {bundle.name} (${bundle.price}/mo)
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <SelectItem value="none" disabled>
+                      No bundles available
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
+              {bundleState.error && (
+                <p className="text-sm text-red-500 mt-1">
+                  Error loading bundles: {bundleState.error}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-4 gap-4 py-4">
