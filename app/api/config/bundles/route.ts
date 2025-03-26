@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { formatPriceForStorage, formatPriceForDisplay, formatHourlyPriceForDisplay } from "@/lib/price-formatter"
 
 // Define a helper function to fetch data from AWS public pricing API
 async function fetchAwsPricingData(url: string, errorMessage: string) {
@@ -121,6 +122,9 @@ export async function GET(request: Request) {
       const encodedRegion = encodeURIComponent(regionName);
       console.log(`Fetching bundles for region: ${regionName}, encoded as: ${encodedRegion}`);
       
+      // Log the region we're using to make it clear in the logs
+      console.log(`REGION UPDATE: Fetching bundles specifically for region: ${regionName}`);
+      
       const bundlesResponse = await fetchAwsPricingData(
         `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${encodedRegion}/primary-selector-aggregations.json`,
         `Failed to fetch WorkSpaces bundles for region: ${regionName}`
@@ -188,7 +192,8 @@ export async function GET(request: Request) {
             
             const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${urlParams.join('/')}/index.json`;
             
-            console.log(`Fetching pricing from URL: ${pricingUrl}`);
+            // Log the URL to help troubleshoot pricing issues
+            console.log(`Fetching region-specific pricing from URL: ${pricingUrl}`);
             
             const pricingData = await fetchAwsPricingData(
               pricingUrl,
@@ -214,37 +219,36 @@ export async function GET(request: Request) {
                 }
               }
               
-              // Store the price for this bundle
+              // Store the price for this bundle along with the region
               bundlePrices.set(bundleDesc, {
                 alwaysOn: totalPrice,
                 autoStop: hourlyPrice,
-                // Calculate hourly cost for AutoStop
-                autoStopMonthly: hourlyPrice * 160, // Assuming 160 hours per month
-                // Add config info for debugging
+                autoStopMonthly: hourlyPrice * 160, 
                 config: {
                   rootVolume: config.rootVolume,
                   userVolume: config.userVolume,
                   operatingSystem: config["Operating System"],
                   license: config.License,
                   runningMode: config["Running Mode"],
+                  region: regionName // Add region information for debugging
                 }
               });
               
-              console.log(`Fetched real price for ${bundleDesc}: AlwaysOn=$${totalPrice}, AutoStop=$${hourlyPrice}/hr`);
+              console.log(`Fetched ${regionName} price for ${bundleDesc}: AlwaysOn=$${totalPrice}, AutoStop=$${hourlyPrice}/hr`);
             }
           } catch (error) {
-            console.error(`Error fetching price for bundle ${config["Bundle Description"]}:`, error);
+            console.error(`Error fetching price for bundle ${config["Bundle Description"]} in region ${regionName}:`, error);
             // Continue with next bundle
           }
         }
         
-        // Debug output to verify pricing
-        console.log("All bundle prices:");
+        // Debug output to verify pricing for this region
+        console.log(`All bundle prices for region ${regionName}:`);
         bundlePrices.forEach((price, bundleDesc) => {
-          console.log(`${bundleDesc}: $${price.alwaysOn}/mo, $${price.autoStop}/hr`);
+          console.log(`${bundleDesc} in ${regionName}: $${price.alwaysOn}/mo, $${price.autoStop}/hr`);
         });
         
-        // Convert bundle descriptions to our bundle format with real prices
+        // Convert bundle descriptions to our bundle format with real prices for this region
         bundles = Array.from(uniqueBundles).map(description => {
           const bundleSpecs = extractBundleSpecs(description as string);
           const bundleId = bundleSpecs.type.toLowerCase().replace(/\./g, '-');
@@ -252,23 +256,32 @@ export async function GET(request: Request) {
           // Get real prices if available, or use fallback
           const priceData = bundlePrices.get(description as string);
           
-          // Important: use the EXACT price from the API, with no rounding or formatting
-          const price = priceData ? priceData.alwaysOn : getFallbackPrice(bundleSpecs, "AlwaysOn");
-          const hourlyPrice = priceData ? priceData.autoStop : getFallbackPrice(bundleSpecs, "AutoStop") / 160;
-          const autoStopMonthlyPrice = priceData ? priceData.autoStopMonthly : getFallbackPrice(bundleSpecs, "AutoStop");
+          // Important: use the EXACT price from the API for this region
+          const rawPrice = priceData ? priceData.alwaysOn : getFallbackPrice(bundleSpecs, "AlwaysOn");
+          const rawHourlyPrice = priceData ? priceData.autoStop : getFallbackPrice(bundleSpecs, "AutoStop") / 160;
+          const rawAutoStopMonthlyPrice = priceData ? priceData.autoStopMonthly : getFallbackPrice(bundleSpecs, "AutoStop");
+          
+          // Format prices consistently using our helper
+          const price = formatPriceForStorage(rawPrice);
+          const hourlyPrice = parseFloat(rawHourlyPrice.toFixed(3)); // Ensure 3 decimal places for hourly
+          const autoStopMonthlyPrice = formatPriceForStorage(rawAutoStopMonthlyPrice);
+          
+          // Log the pricing for this bundle
+          console.log(`Bundle ${bundleId} in ${regionName}: Raw=${rawPrice}, Formatted=${price}, Display=${formatPriceForDisplay(price)}`);
           
           return {
             id: bundleId,
             name: description as string,
-            price: price, // Store exact price
-            displayPrice: `$${price.toFixed(2)}/mo`, // Format for display
+            price: price, // Ensure this is EXACTLY what calculations will use
+            displayPrice: formatPriceForDisplay(price),
             hourlyPrice: hourlyPrice,
-            displayHourlyPrice: `$${hourlyPrice.toFixed(3)}/hr`,
+            displayHourlyPrice: formatHourlyPriceForDisplay(hourlyPrice),
             autoStopMonthlyPrice: autoStopMonthlyPrice,
             specs: bundleSpecs,
             pricingSource: priceData ? "aws-api" : "estimated",
-            // Include the config used for this price
-            pricingConfig: priceData ? priceData.config : null,
+            // Include debug information
+            region: regionName,
+            timestamp: Date.now()
           };
         });
         
@@ -302,6 +315,9 @@ export async function GET(request: Request) {
           value: (license as string).toLowerCase().replace(/\s+/g, '-'),
           label: license as string,
         }));
+        
+        // Add debugging information to response
+        console.log(`Returning ${bundles.length} bundles for ${regionName} with timestamps`);
       }
     } catch (error) {
       console.error(`Error parsing bundles for region ${region}:`, error);
@@ -323,6 +339,7 @@ export async function GET(request: Request) {
       operatingSystems,
       licenseOptions,
       region,
+      timestamp: Date.now() // Add timestamp to help with caching
     });
   } catch (error) {
     console.error("Error fetching bundle options:", error);

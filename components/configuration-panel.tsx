@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider"
 import { Cpu, MemoryStick, HardDrive, MonitorSmartphone } from "lucide-react"
 import type { WorkSpaceConfig, ConfigOptions } from "@/types/workspace"
+import { getBundlesForRegion } from "@/app/actions/updateBundles"
 
 interface ConfigurationPanelProps {
   config: WorkSpaceConfig
@@ -22,13 +23,87 @@ export default function ConfigurationPanel({
   onConfigChange,
   isLoading,
 }: ConfigurationPanelProps) {
-  // Ensure we have valid options
+  // Add state for region-specific bundle options
+  const [currentRegion, setCurrentRegion] = useState(config.region)
+  const [regionBundles, setRegionBundles] = useState([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [activeTab, setActiveTab] = useState("general")
+  const [isMounted, setIsMounted] = useState(false)
+
+  // Extract options from configOptions - ensure they're available
   const regions = configOptions?.regions || []
-  const bundles = configOptions?.bundles || []
   const operatingSystems = configOptions?.operatingSystems || []
   const runningModes = configOptions?.runningModes || []
   const billingOptions = configOptions?.billingOptions || []
-  const [activeTab, setActiveTab] = useState("general")
+  
+  // Initialize region bundles once when component mounts
+  useEffect(() => {
+    setIsMounted(true)
+    setRegionBundles(configOptions?.bundles || [])
+  }, [configOptions?.bundles])
+  
+  // Use regionBundles instead of configOptions.bundles
+  const bundles = regionBundles
+
+  // Watch for region changes and fetch new bundle data
+  useEffect(() => {
+    if (!isMounted) return
+    
+    if (config.region !== currentRegion) {
+      setIsRefreshing(true)
+      setCurrentRegion(config.region)
+      
+      // Fetch bundles for the new region
+      const updateBundlesForRegion = async () => {
+        console.log(`Refreshing bundles for region change: ${config.region}`)
+        try {
+          const newOptions = await getBundlesForRegion(config.region)
+          
+          if (newOptions.bundles.length > 0) {
+            console.log(`Received ${newOptions.bundles.length} bundles for ${config.region}`)
+            
+            // For each bundle, create a string representation for debugging
+            newOptions.bundles.forEach(bundle => {
+              console.log(`Bundle: ${bundle.name}, Price: ${bundle.price}, DisplayPrice: ${bundle.displayPrice}`)
+            })
+            
+            setRegionBundles(newOptions.bundles)
+            
+            // Check if current bundle exists in new region
+            const bundleExists = newOptions.bundles.some(b => b.id === config.bundleId)
+            
+            // If current bundle doesn't exist in this region, select the first available bundle
+            if (!bundleExists && newOptions.bundles.length > 0) {
+              console.log(`Selected bundle ${config.bundleId} not available in ${config.region}, selecting ${newOptions.bundles[0].id}`)
+              onConfigChange({ 
+                bundleId: newOptions.bundles[0].id,
+                bundleSpecs: newOptions.bundles[0].specs
+              })
+            }
+          }
+        } catch (error) {
+          console.error("Error updating bundles for region:", error)
+        } finally {
+          setIsRefreshing(false)
+        }
+      }
+      
+      updateBundlesForRegion()
+    }
+  }, [config.region, currentRegion, isMounted])
+
+  // Only render once client-side to prevent hydration mismatch
+  if (!isMounted) {
+    return (
+      <Card className="shadow-sm">
+        <CardContent className="p-6">
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-pulse text-gray-500">Loading configuration options...</div>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card className="shadow-sm">
@@ -50,7 +125,7 @@ export default function ConfigurationPanel({
               <Select
                 value={config.region}
                 onValueChange={(value) => onConfigChange({ region: value })}
-                disabled={isLoading}
+                disabled={isLoading || isRefreshing}
               >
                 <SelectTrigger id="region" className="w-full">
                   <SelectValue placeholder="Select a region" />
@@ -69,8 +144,17 @@ export default function ConfigurationPanel({
               <Label htmlFor="bundle">WorkSpace Bundle</Label>
               <Select
                 value={config.bundleId}
-                onValueChange={(value) => onConfigChange({ bundleId: value })}
-                disabled={isLoading}
+                onValueChange={(value) => {
+                  const selectedBundle = bundles.find(b => b.id === value);
+                  if (selectedBundle) {
+                    console.log(`Selected bundle: ${selectedBundle.name}, Price: ${selectedBundle.price}`);
+                    onConfigChange({ 
+                      bundleId: value,
+                      bundleSpecs: selectedBundle.specs
+                    });
+                  }
+                }}
+                disabled={isLoading || isRefreshing}
               >
                 <SelectTrigger id="bundle" className="w-full">
                   <SelectValue placeholder="Select a bundle" />
@@ -78,11 +162,16 @@ export default function ConfigurationPanel({
                 <SelectContent>
                   {bundles.map((bundle) => (
                     <SelectItem key={bundle.id} value={bundle.id}>
-                      {bundle.name} (${bundle.price}/mo)
+                      {bundle.name} ({bundle.displayPrice})
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {isRefreshing && (
+                <div className="text-xs mt-1 text-muted-foreground">
+                  Updating bundles for region...
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-4 gap-4 py-4">

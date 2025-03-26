@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import type { WorkSpaceConfig } from "@/types/workspace"
+import { formatPriceForStorage, formatPriceForDisplay } from "@/lib/price-formatter"
 
 // Define a helper function to fetch data from AWS public pricing API
 async function fetchAwsPricingData(url: string, errorMessage: string) {
@@ -295,10 +296,11 @@ export async function POST(request: Request) {
               
               // Use the pricing data from AWS
               bundleName = selectedConfig["Bundle Description"];
-              baseCost = totalMonthlyPrice;
+              // Ensure consistent price formatting
+              baseCost = formatPriceForStorage(totalMonthlyPrice);
               pricingSource = "aws-api";
               
-              console.log(`Using AWS API pricing: ${baseCost} for ${bundleName}`);
+              console.log(`Using AWS API pricing: ${baseCost} (${formatPriceForDisplay(baseCost)}) for ${bundleName}`);
             } else {
               throw new Error("No pricing data available from AWS API");
             }
@@ -320,8 +322,11 @@ export async function POST(request: Request) {
     if (pricingSource === "calculated") {
       console.log("Using calculated pricing");
       
-      baseCost = estimateBundlePrice(config.bundleId, config.operatingSystem, config.runningMode);
+      const rawPrice = estimateBundlePrice(config.bundleId, config.operatingSystem, config.runningMode);
+      baseCost = formatPriceForStorage(rawPrice); // Ensure consistent price format
       bundleName = getBundleName(config.bundleId);
+      
+      console.log(`Using calculated pricing: ${baseCost} (${formatPriceForDisplay(baseCost)}) for ${bundleName}`);
     }
 
     // Apply running mode adjustment if not already handled
@@ -330,10 +335,10 @@ export async function POST(request: Request) {
       baseCost = baseCost * 0.8;
     }
 
-    // Calculate total costs
+    // Calculate total costs - ensure consistent decimal handling
     const costPerWorkspace = baseCost;
-    const totalMonthlyCost = costPerWorkspace * config.numberOfWorkspaces;
-    const annualEstimate = totalMonthlyCost * 12;
+    const totalMonthlyCost = formatPriceForStorage(costPerWorkspace * config.numberOfWorkspaces);
+    const annualEstimate = formatPriceForStorage(totalMonthlyCost * 12);
 
     // Determine billing model display name
     const billingModel = config.billingOption === "monthly" ? "Monthly" : "Hourly";
@@ -347,6 +352,9 @@ export async function POST(request: Request) {
       baseCost,
       pricingSource,
     });
+    
+    // Log the final cost summary
+    console.log(`Cost Summary - Workspace: ${formatPriceForDisplay(costPerWorkspace)}, Total: ${formatPriceForDisplay(totalMonthlyCost)}, Annual: ${formatPriceForDisplay(annualEstimate)}`);
   } catch (error) {
     console.error("Error calculating pricing:", error);
     return NextResponse.json({ error: "Failed to calculate pricing" }, { status: 500 });
