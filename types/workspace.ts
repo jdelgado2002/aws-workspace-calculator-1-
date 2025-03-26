@@ -38,7 +38,12 @@ export interface WorkSpaceConfig {
     memory: number
     storage: number
     graphics: string
+    gpu?: boolean
+    gpuCount?: number
+    videoMemory?: number
   }
+  rootVolume: string
+  userVolume: string
   operatingSystem: string
   runningMode: string
   numberOfWorkspaces: number
@@ -53,6 +58,14 @@ export interface PricingEstimate {
   bundleName: string
   billingModel: string
   baseCost: number
-  pricingSource?: "aws" | "calculated"
+  pricingSource?: "aws-api" | "calculated"
+  storage?: number
+  rootVolume?: number
+  userVolume?: number
+  originalConfig?: {
+    rootVolume: string
+    userVolume: string
+    bundleStorage?: number
+  }
 }
 
