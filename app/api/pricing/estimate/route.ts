@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import type { WorkSpaceConfig } from "@/types/workspace"
 import { formatPriceForStorage, formatPriceForDisplay } from "@/lib/price-formatter"
+import { getRegionLabel } from '@/lib/utils'
 
 // Define a helper function to fetch data from AWS public pricing API
 async function fetchAwsPricingData(url: string, errorMessage: string) {
@@ -27,26 +28,8 @@ async function fetchAwsPricingData(url: string, errorMessage: string) {
 
 // Extract the original region name from AWS region code
 function getOriginalRegionName(regionCode: string) {
-  // Map common region codes to their original names used in AWS pricing API
-  const regionMap: Record<string, string> = {
-    'us-east-1': 'US East (N. Virginia)',
-    'us-west-2': 'US West (Oregon)',
-    'eu-west-1': 'EU (Ireland)',
-    'ap-northeast-1': 'Asia Pacific (Tokyo)',
-    'ap-southeast-2': 'Asia Pacific (Sydney)',
-    'ca-central-1': 'Canada (Central)',
-    'eu-central-1': 'EU (Frankfurt)',
-    'eu-west-2': 'EU (London)',
-    'sa-east-1': 'South America (Sao Paulo)',
-    'ap-south-1': 'Asia Pacific (Mumbai)',
-    'ap-northeast-2': 'Asia Pacific (Seoul)',
-    'ap-southeast-1': 'Asia Pacific (Singapore)',
-    'il-central-1': 'Israel (Tel Aviv)',
-    'us-gov-east-1': 'AWS GovCloud (US-East)',
-    'us-gov-west-1': 'AWS GovCloud (US)'
-  };
-  
-  return regionMap[regionCode] || regionCode;
+  // Replace with the shared utility function
+  return getRegionLabel(regionCode);
 }
 
 // Helper function to estimate price based on bundle specs (fallback)

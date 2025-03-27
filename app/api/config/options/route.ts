@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { getRegionLabel } from '@/lib/utils';
 
 // Define a helper function to fetch data from AWS public pricing API
 async function fetchAwsPricingData(url: string, errorMessage: string) {
@@ -121,11 +122,11 @@ export async function GET() {
       console.error("Error fetching regions from metadata:", error);
       // Fall back to default regions with proper original names
       regions = [
-        { value: "us-east-1", label: "US East (N. Virginia)", originalName: "US East (N. Virginia)" },
-        { value: "us-west-2", label: "US West (Oregon)", originalName: "US West (Oregon)" },
-        { value: "eu-west-1", label: "EU (Ireland)", originalName: "EU (Ireland)" },
-        { value: "ap-northeast-1", label: "Asia Pacific (Tokyo)", originalName: "Asia Pacific (Tokyo)" },
-        { value: "ap-southeast-2", label: "Asia Pacific (Sydney)", originalName: "Asia Pacific (Sydney)" },
+        { value: "us-east-1", label: getRegionLabel("us-east-1"), originalName: getRegionLabel("us-east-1") },
+        { value: "us-west-2", label: getRegionLabel("us-west-2"), originalName: getRegionLabel("us-west-2") },
+        { value: "eu-west-1", label: getRegionLabel("eu-west-1"), originalName: getRegionLabel("eu-west-1") },
+        { value: "ap-northeast-1", label: getRegionLabel("ap-northeast-1"), originalName: getRegionLabel("ap-northeast-1") },
+        { value: "ap-southeast-2", label: getRegionLabel("ap-southeast-2"), originalName: getRegionLabel("ap-southeast-2") },
       ];
     }
 

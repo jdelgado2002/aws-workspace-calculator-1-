@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { formatPriceForStorage, formatPriceForDisplay, formatHourlyPriceForDisplay } from "@/lib/price-formatter"
+import { getRegionLabel } from '@/lib/utils';
 
 // Define a helper function to fetch data from AWS public pricing API
 async function fetchAwsPricingData(url: string, errorMessage: string) {
@@ -131,19 +132,9 @@ export async function GET(request: Request) {
             regionName = possibleMatch;
           }
           
-          // If all else fails, map common region codes to full names
+          // If all else fails, map common region codes to full names using the centralized function
           if (regionName === region) {
-            const regionMap = {
-              'us-east-1': 'US East (N. Virginia)',
-              'us-west-2': 'US West (Oregon)',
-              'eu-west-1': 'EU (Ireland)',
-              'ap-northeast-1': 'Asia Pacific (Tokyo)',
-              'ap-southeast-2': 'Asia Pacific (Sydney)',
-              'us-gov-east-1': 'AWS GovCloud (US-East)',
-              'us-gov-west-1': 'AWS GovCloud (US)'
-            };
-            
-            regionName = regionMap[region] || region;
+            regionName = getRegionLabel(region);
           }
         }
       }
