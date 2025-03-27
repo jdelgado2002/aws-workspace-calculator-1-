@@ -157,7 +157,8 @@ export function PoolUsagePattern({ value = DEFAULT_USAGE_PATTERN, onChange, clas
                 
                 {renderSlider(
                   "Peak concurrent users", 
-                  "Average number of simultaneous users during peak hours on weekdays.", 
+                  "Percentage of your max users (currently " + Math.ceil((value.weekdayPeakConcurrentUsers / 100) * 100) + 
+                  " out of " + 100 + " users) that will need simultaneous access during peak hours on weekdays.", 
                   value.weekdayPeakConcurrentUsers, 
                   (newValue) => onChange({ weekdayPeakConcurrentUsers: newValue }), 
                   0, 100, 1,
@@ -208,7 +209,8 @@ export function PoolUsagePattern({ value = DEFAULT_USAGE_PATTERN, onChange, clas
                 
                 {renderSlider(
                   "Peak concurrent users", 
-                  "Average number of simultaneous users during peak hours on weekends.", 
+                  "Percentage of your max users (currently " + Math.ceil((value.weekendPeakConcurrentUsers / 100) * 100) + 
+                  " out of " + 100 + " users) that will need simultaneous access during peak hours on weekends.", 
                   value.weekendPeakConcurrentUsers, 
                   (newValue) => onChange({ weekendPeakConcurrentUsers: newValue }), 
                   0, 100, 1,

@@ -156,6 +156,9 @@ export async function GET() {
         const uniqueLicenses = new Set();
         const bundleConfigs = []; // Store full configurations for price lookup
         
+        // Log aggregation data for debugging
+        console.log(`Found ${bundlesResponse.aggregations.length} configurations for region ${defaultRegion}`);
+        
         bundlesResponse.aggregations.forEach(item => {
           if (item.selectors) {
             // Extract bundle descriptions
@@ -184,6 +187,9 @@ export async function GET() {
           }
         });
         
+        // Log the unique values found for debugging
+        console.log(`Found unique volume options - Root: ${Array.from(uniqueRootVolumes).join(', ')}, User: ${Array.from(uniqueUserVolumes).join(', ')}`);
+        
         // Fetch actual prices for bundles from AWS API
         const bundlePrices = new Map(); // Map to store bundle prices
         
@@ -195,12 +201,16 @@ export async function GET() {
             // If we've already priced this bundle, skip
             if (bundlePrices.has(bundleDesc)) continue;
             
+            // Use the actual values from the API response
+            const rootVol = config.rootVolume;
+            const userVol = config.userVolume;
+            
             // Construct the pricing URL to get actual prices
             const urlParams = [
               encodedRegion,
               encodeURIComponent(config["Bundle Description"]),
-              encodeURIComponent(config.rootVolume),
-              encodeURIComponent(config.userVolume),
+              encodeURIComponent(rootVol),
+              encodeURIComponent(userVol),
               encodeURIComponent(config["Operating System"]),
               encodeURIComponent(config.License),
               encodeURIComponent(config["Running Mode"]),
@@ -342,6 +352,8 @@ export async function GET() {
 
     // If no bundles were extracted, use fallback bundles
     if (bundles.length === 0) {
+      console.log("No bundles found, using fallbacks");
+      // Use generic fallbacks that will work with most regions
       bundles = [
         {
           id: "value",
@@ -352,7 +364,7 @@ export async function GET() {
             type: "Value",
             vCPU: 1,
             memory: 2,
-            storage: 80,
+            storage: 90, // Generic value (80+10)
             graphics: "Standard",
           },
         },
@@ -365,7 +377,7 @@ export async function GET() {
             type: "Standard",
             vCPU: 2,
             memory: 4,
-            storage: 80,
+            storage: 130, // Generic value (80+50)
             graphics: "Standard",
           },
         },
@@ -378,7 +390,7 @@ export async function GET() {
             type: "Performance",
             vCPU: 2,
             memory: 8,
-            storage: 100,
+            storage: 180, // Generic value (80+100)
             graphics: "Standard",
           },
         },
@@ -391,23 +403,25 @@ export async function GET() {
             type: "Power",
             vCPU: 4,
             memory: 16,
-            storage: 175,
+            storage: 180, // Generic value (80+100)
             graphics: "High Performance",
           },
         },
       ];
     }
 
-    // If no root volume options were extracted, use fallback options
+    // If no root volume options were extracted, use generic fallback options
     if (rootVolumeOptions.length === 0) {
+      console.log("No root volume options found, using fallbacks");
       rootVolumeOptions = [
         { value: "80", label: "80 GB" },
         { value: "175", label: "175 GB" },
       ];
     }
 
-    // If no user volume options were extracted, use fallback options
+    // If no user volume options were extracted, use generic fallback options
     if (userVolumeOptions.length === 0) {
+      console.log("No user volume options found, using fallbacks");
       userVolumeOptions = [
         { value: "10", label: "10 GB" },
         { value: "50", label: "50 GB" },

@@ -62,6 +62,114 @@ function calculateWeeklyUsageHours(usagePattern: PoolUsagePattern): number {
   return effectiveWeekdayPeakHours + effectiveWeekdayOffPeakHours + effectiveWeekendPeakHours + effectiveWeekendOffPeakHours;
 }
 
+function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: number, userCount: number): {
+  userLicenseCost: number;
+  activeStreamingCost: number;
+  stoppedInstanceCost: number;
+  totalMonthlyCost: number;
+  peakWeekdayHours: number;
+  offPeakWeekdayHours: number;
+  peakWeekendHours: number;
+  offPeakWeekendHours: number;
+  totalUtilizedHours: number;
+  totalBufferHours: number;
+} {
+  // Constants based on AWS calculator
+  const LICENSE_COST_PER_USER = 4.19; // USD per user per month
+  const ACTIVE_STREAMING_RATE = baseHourlyRate; // Default to provided base rate
+  const STOPPED_INSTANCE_RATE = 0.025; // USD per hour for stopped instances
+  const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
+  const WEEKS_PER_MONTH = 4.35; // AWS uses 730 hours / 168 hours = 4.35 weeks per month
+  
+  // 1. Calculate user license costs
+  const userLicenseCost = LICENSE_COST_PER_USER * userCount;
+  
+  // 2. Calculate weekday usage hours
+  const weekdayDays = usagePattern.weekdayDaysCount;
+  const weekdayPeakHoursPerDay = usagePattern.weekdayPeakHoursPerDay;
+  const weekdayTotalHoursPerDay = 24;
+  
+  const peakWeekdayHours = weekdayDays * weekdayPeakHoursPerDay * WEEKS_PER_MONTH;
+  const totalWeekdayHours = weekdayDays * weekdayTotalHoursPerDay * WEEKS_PER_MONTH;
+  const offPeakWeekdayHours = totalWeekdayHours - peakWeekdayHours;
+  
+  // Convert percentage to actual users
+  const peakWeekdayConcurrentUsers = Math.ceil((usagePattern.weekdayPeakConcurrentUsers / 100) * userCount);
+  const offPeakWeekdayConcurrentUsers = Math.ceil((usagePattern.weekdayOffPeakConcurrentUsers / 100) * userCount);
+  
+  // Ensure at least 1 instance
+  const peakWeekdayInstances = Math.max(1, peakWeekdayConcurrentUsers);
+  const offPeakWeekdayInstances = Math.max(1, offPeakWeekdayConcurrentUsers);
+  
+  // Calculate utilized instance hours
+  const peakWeekdayInstanceHours = peakWeekdayInstances * peakWeekdayHours;
+  const offPeakWeekdayInstanceHours = offPeakWeekdayInstances * offPeakWeekdayHours;
+  const totalWeekdayUtilizedHours = peakWeekdayInstanceHours + offPeakWeekdayInstanceHours;
+  
+  // 3. Calculate weekday buffer hours (stopped instances)
+  const peakWeekdayBufferInstances = Math.ceil(peakWeekdayInstances * BUFFER_FACTOR);
+  const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayInstances * BUFFER_FACTOR);
+  
+  const peakWeekdayBufferHours = peakWeekdayBufferInstances * peakWeekdayHours;
+  const offPeakWeekdayBufferHours = offPeakWeekdayBufferInstances * offPeakWeekdayHours;
+  const totalWeekdayBufferHours = peakWeekdayBufferHours + offPeakWeekdayBufferHours;
+  
+  // 4. Calculate weekend usage hours
+  const weekendDays = usagePattern.weekendDaysCount;
+  const weekendPeakHoursPerDay = usagePattern.weekendPeakHoursPerDay;
+  const weekendTotalHoursPerDay = 24;
+  
+  const peakWeekendHours = weekendDays * weekendPeakHoursPerDay * WEEKS_PER_MONTH;
+  const totalWeekendHours = weekendDays * weekendTotalHoursPerDay * WEEKS_PER_MONTH;
+  const offPeakWeekendHours = totalWeekendHours - peakWeekendHours;
+  
+  // Convert percentage to actual users
+  const peakWeekendConcurrentUsers = Math.ceil((usagePattern.weekendPeakConcurrentUsers / 100) * userCount);
+  const offPeakWeekendConcurrentUsers = Math.ceil((usagePattern.weekendOffPeakConcurrentUsers / 100) * userCount);
+  
+  // Ensure at least 1 instance
+  const peakWeekendInstances = Math.max(1, peakWeekendConcurrentUsers);
+  const offPeakWeekendInstances = Math.max(1, offPeakWeekendConcurrentUsers);
+  
+  // Calculate utilized instance hours
+  const peakWeekendInstanceHours = peakWeekendInstances * peakWeekendHours;
+  const offPeakWeekendInstanceHours = offPeakWeekendInstances * offPeakWeekendHours;
+  const totalWeekendUtilizedHours = peakWeekendInstanceHours + offPeakWeekendInstanceHours;
+  
+  // 5. Calculate weekend buffer hours (stopped instances)
+  const peakWeekendBufferInstances = Math.ceil(peakWeekendInstances * BUFFER_FACTOR);
+  const offPeakWeekendBufferInstances = Math.ceil(offPeakWeekendInstances * BUFFER_FACTOR);
+  
+  const peakWeekendBufferHours = peakWeekendBufferInstances * peakWeekendHours;
+  const offPeakWeekendBufferHours = offPeakWeekendBufferInstances * offPeakWeekendHours;
+  const totalWeekendBufferHours = peakWeekendBufferHours + offPeakWeekendBufferHours;
+  
+  // 6. Calculate total hours
+  const totalUtilizedHours = totalWeekdayUtilizedHours + totalWeekendUtilizedHours;
+  const totalBufferHours = totalWeekdayBufferHours + totalWeekendBufferHours;
+  
+  // 7. Calculate costs
+  const activeStreamingCost = totalUtilizedHours * ACTIVE_STREAMING_RATE;
+  const stoppedInstanceCost = totalBufferHours * STOPPED_INSTANCE_RATE;
+  
+  // 8. Total cost
+  const instanceCost = activeStreamingCost + stoppedInstanceCost;
+  const totalMonthlyCost = userLicenseCost + instanceCost;
+  
+  return {
+    userLicenseCost,
+    activeStreamingCost,
+    stoppedInstanceCost,
+    totalMonthlyCost,
+    peakWeekdayHours,
+    offPeakWeekdayHours,
+    peakWeekendHours,
+    offPeakWeekendHours,
+    totalUtilizedHours,
+    totalBufferHours
+  };
+}
+
 export default function CostSummaryPanel({ config, pricingEstimate, isLoading, activeTab = "core" }: CostSummaryPanelProps) {
   // Determine if we're showing pool pricing or core pricing based on the active tab
   const isPool = activeTab === "pool";
@@ -90,13 +198,15 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   const fullMonthlyCost = pricingEstimate?.totalMonthlyCost || 0;
   
   // Calculate optimized pool costs (only if we're in pool mode)
-  const poolOptimizedHourlyCost = isPool
-    ? baseHourlyCost * poolUtilization * userCount
-    : 0;
-    
-  const poolOptimizedMonthlyCost = isPool
-    ? poolOptimizedHourlyCost * monthlyUsageHours
-    : 0;
+  const poolCosts = isPool && config.poolUsagePattern
+    ? calculatePoolCosts(
+        config.poolUsagePattern, 
+        baseHourlyCost, 
+        userCount
+      )
+    : { totalMonthlyCost: 0, userLicenseCost: 0, activeStreamingCost: 0, stoppedInstanceCost: 0 };
+
+  const poolOptimizedMonthlyCost = isPool ? poolCosts.totalMonthlyCost : 0;
   
   // Calculate savings (only for pool)
   const potentialSavings = isPool
@@ -206,7 +316,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                   <div className="bg-blue-50 p-4 rounded-md border border-blue-100">
                     <div className="flex justify-between mb-3">
                       <div className="flex items-center gap-1">
-                        <h3 className="text-sm font-medium text-blue-800">Pool Usage Optimization</h3>
+                        <h3 className="text-sm font-medium text-blue-800">Pool Usage Details</h3>
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger>
@@ -214,34 +324,34 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs">
                               <p className="text-xs">
-                                Pool costs are calculated based on your usage pattern. 
-                                Lower utilization means lower costs compared to dedicated WorkSpaces.
+                                Pool costs follow AWS's pricing model including user licenses, active streaming hours, and buffer instances.
                               </p>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
                       </div>
-                      <Badge variant="outline" className="bg-white text-blue-700">
-                        {formatPercent(poolUtilization)} utilization
-                      </Badge>
                     </div>
                     
                     <div className="space-y-2">
                       <div className="flex justify-between">
-                        <span className="text-sm text-blue-600">Effective usage hours</span>
-                        <span className="text-sm font-medium">{Math.round(monthlyUsageHours)} hrs/month</span>
+                        <span className="text-sm text-blue-600">User licenses</span>
+                        <span className="text-sm font-medium">{formatCurrency(poolCosts.userLicenseCost)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-sm text-blue-600">Standard monthly cost</span>
-                        <span className="text-sm font-medium">{formatCurrency(fullMonthlyCost)}</span>
+                        <span className="text-sm text-blue-600">Active streaming</span>
+                        <span className="text-sm font-medium">{formatCurrency(poolCosts.activeStreamingCost)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-sm text-blue-600">Optimized monthly cost</span>
-                        <span className="text-sm font-medium">{formatCurrency(poolOptimizedMonthlyCost)}</span>
+                        <span className="text-sm text-blue-600">Stopped instances</span>
+                        <span className="text-sm font-medium">{formatCurrency(poolCosts.stoppedInstanceCost)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-blue-600">Total instance hours</span>
+                        <span className="text-sm font-medium">{Math.round(poolCosts.totalUtilizedHours + poolCosts.totalBufferHours)}</span>
                       </div>
                       <div className="flex justify-between border-t border-blue-200 pt-2 mt-2">
-                        <span className="text-sm font-medium text-blue-700">Your estimated savings</span>
-                        <span className="text-sm font-medium text-green-600">{formatCurrency(potentialSavings)}</span>
+                        <span className="text-sm font-medium text-blue-700">Total monthly cost</span>
+                        <span className="text-sm font-medium">{formatCurrency(poolCosts.totalMonthlyCost)}</span>
                       </div>
                     </div>
                   </div>
