@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
-import { Cpu, MemoryStick, HardDrive, MonitorSmartphone, Users } from "lucide-react"
+import { Cpu, MemoryStick, HardDrive, MonitorSmartphone, Users, Database } from "lucide-react"
 import type { WorkSpaceConfig, ConfigOptions, PoolUsagePattern } from "@/types/workspace"
 import { getBundlesForRegion } from "@/app/actions/updateBundles"
 import { getPoolOptions } from "@/app/actions/updatePoolOptions"
@@ -72,6 +72,10 @@ export default function ConfigurationPanel({
   const runningModes = configOptions?.runningModes || []
   const billingOptions = configOptions?.billingOptions || []
   
+  // Extract the volume options from configOptions
+  const rootVolumeOptions = configOptions?.storage?.rootVolume || [];
+  const userVolumeOptions = configOptions?.storage?.userVolume || [];
+
   // Initialize region bundles once when component mounts
   useEffect(() => {
     setIsMounted(true)
@@ -387,12 +391,63 @@ export default function ConfigurationPanel({
                 <div className="font-medium">{config.bundleSpecs.memory} GB</div>
               </div>
 
+              {/* Replace the single storage display with two separate volume selectors */}
               <div className="flex flex-col items-center">
                 <div className="bg-blue-50 p-3 rounded-full mb-2">
                   <HardDrive className="h-5 w-5 text-blue-600" />
                 </div>
-                <div className="text-xs text-gray-500">SSD Volume</div>
-                <div className="font-medium">{config.bundleSpecs.storage} GB</div>
+                <div className="text-xs text-gray-500">Root Volume</div>
+                <Select
+                  value={config.rootVolume?.toString() || ""}
+                  onValueChange={(value) => onConfigChange({ rootVolume: value })}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-7 px-2 w-20 text-center font-medium bg-transparent border-none focus:ring-0 focus:ring-offset-0">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {rootVolumeOptions.map((volume) => (
+                      <SelectItem key={volume.value} value={volume.value}>
+                        {volume.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex flex-col items-center">
+                <div className="bg-blue-50 p-3 rounded-full mb-2">
+                  <Database className="h-5 w-5 text-blue-600" />
+                </div>
+                <div className="text-xs text-gray-500">User Volume</div>
+                <Select
+                  value={config.userVolume?.toString() || ""}
+                  onValueChange={(value) => onConfigChange({ userVolume: value })}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger className="h-7 px-2 w-20 text-center font-medium bg-transparent border-none focus:ring-0 focus:ring-offset-0">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {userVolumeOptions.map((volume) => (
+                      <SelectItem key={volume.value} value={volume.value}>
+                        {volume.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex flex-col items-center col-span-4 border-t pt-4 mt-4">
+                <div className="flex gap-2 items-center">
+                  <HardDrive className="h-5 w-5 text-blue-600" />
+                  <span className="text-sm font-medium">
+                    Total Storage: {parseInt(config.rootVolume || "0") + parseInt(config.userVolume || "0")} GB
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  ({config.rootVolume || "0"} GB Root + {config.userVolume || "0"} GB User)
+                </div>
               </div>
 
               <div className="flex flex-col items-center">

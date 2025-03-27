@@ -234,8 +234,23 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   };
 
   return (
-    <Card className="shadow-sm h-full">
+    <Card className="h-full shadow-sm">
       <CardContent className="p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-6">Pricing Summary</h2>
+        
+        {/* Show a warning if volume selections weren't honored */}
+        {pricingEstimate && !pricingEstimate.volumeSelectionHonored && 
+          config.rootVolume && config.userVolume && (
+          <Alert variant="warning" className="mb-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              Your selected volumes (Root: {config.rootVolume}GB, User: {config.userVolume}GB) were 
+              adjusted to (Root: {pricingEstimate.rootVolume}GB, User: {pricingEstimate.userVolume}GB)
+              to match available options in this region.
+            </AlertDescription>
+          </Alert>
+        )}
+        
         <div className="flex justify-between items-center mb-1">
           <h2 className="text-xl font-bold text-gray-900">Cost Summary</h2>
           <div className="flex items-center gap-2">

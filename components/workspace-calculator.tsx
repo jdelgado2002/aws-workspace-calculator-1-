@@ -58,6 +58,46 @@ export default function WorkSpaceCalculator() {
 
   const debouncedConfig = useDebounce(config, 500)
 
+  // Define onConfigChange first before referencing it
+  const onConfigChange = useCallback((newConfig: Partial<WorkSpaceConfig>) => {
+    // Update config based on the changes
+    setConfig(prevConfig => {
+      // Special case for bundle changes
+      if (newConfig.bundleId && newConfig.bundleId !== prevConfig.bundleId) {
+        // Find the selected bundle
+        const selectedBundle = configOptions?.bundles?.find(bundle => bundle.id === newConfig.bundleId);
+        
+        if (selectedBundle) {
+          // Include bundle specs automatically
+          let updatedConfig = { 
+            ...prevConfig, 
+            ...newConfig,
+            bundleSpecs: selectedBundle.specs 
+          };
+          
+          // Update volumes if the bundle has pricing configuration with volumes
+          if (selectedBundle.pricingConfig?.rootVolume) {
+            updatedConfig.rootVolume = selectedBundle.pricingConfig.rootVolume.replace(/\s*GB$/i, '');
+          }
+          
+          if (selectedBundle.pricingConfig?.userVolume) {
+            updatedConfig.userVolume = selectedBundle.pricingConfig.userVolume.replace(/\s*GB$/i, '');
+          }
+          
+          return updatedConfig;
+        }
+      }
+      
+      // For non-bundle changes, simply merge the configs
+      return { ...prevConfig, ...newConfig };
+    });
+  }, [configOptions?.bundles]);
+
+  // Track tab changes
+  const handleTabChange = useCallback((tab: string) => {
+    setActiveTab(tab);
+  }, []);
+
   // Fetch configuration options on component mount
   useEffect(() => {
     const loadInitialData = async () => {
@@ -181,11 +221,6 @@ export default function WorkSpaceCalculator() {
     setConfig(prevConfig => ({ ...prevConfig, ...newConfig }))
   }, [])
 
-  // Track tab changes
-  const handleTabChange = useCallback((tab: string) => {
-    setActiveTab(tab);
-  }, []);
-
   return (
     <div className="container mx-auto py-8 px-4">
       {error && (
@@ -200,7 +235,7 @@ export default function WorkSpaceCalculator() {
           <ConfigurationPanel
             config={config}
             configOptions={configOptions}
-            onConfigChange={handleConfigChange}
+            onConfigChange={onConfigChange}
             isLoading={loading}
             onTabChange={handleTabChange}
           />

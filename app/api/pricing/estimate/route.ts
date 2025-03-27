@@ -155,9 +155,11 @@ export async function POST(request: Request) {
     console.log(`Using operating system: ${apiOperatingSystem}, license: ${apiLicense}`);
     
     // Create formatted volume strings for API calls
-    // Default values that work for most regions
+    // Always use the user-selected values if provided
     let formattedRootVolume = config.rootVolume ? `${config.rootVolume} GB` : "80 GB";
     let formattedUserVolume = config.userVolume ? `${config.userVolume} GB` : "100 GB";
+    
+    console.log(`Initial volume values from user selection: Root=${formattedRootVolume}, User=${formattedUserVolume}`);
     
     // Try to get direct pricing information from AWS Pricing API
     try {
@@ -252,27 +254,62 @@ export async function POST(request: Request) {
           console.log(`Available license options: ${matchingLicenses.join(', ')}`);
           console.log(`Available running modes: ${matchingRunningModes.join(', ')}`);
           
+          // Check if our requested volumes are in the list of available volumes
+          const userSelectedRootVolume = formattedRootVolume;
+          const userSelectedUserVolume = formattedUserVolume;
+          
+          // Check if the user's volume selections are valid for this region/bundle
+          const isRootVolumeValid = matchingVolumes.includes(userSelectedRootVolume);
+          const isUserVolumeValid = matchingVolumes.includes(userSelectedUserVolume);
+          
+          console.log(`User selected volumes - Root: ${userSelectedRootVolume} (valid: ${isRootVolumeValid}), User: ${userSelectedUserVolume} (valid: ${isUserVolumeValid})`);
+          
           // Now find a specific configuration that exists in the API
           let selectedConfig = null;
+          let foundExactVolumeMatch = false;
           
-          // Try to find a configuration that matches our exact OS and license preferences
-          for (const item of aggregationData.aggregations) {
-            if (item.selectors && 
-                item.selectors["Bundle Description"] === matchingBundle &&
-                item.selectors["Operating System"] === apiOperatingSystem &&
-                item.selectors.License === apiLicense) {
-              // We've found an exact match, use this configuration
-              selectedConfig = item.selectors;
-              selectedRootVolume = selectedConfig.rootVolume;
-              selectedUserVolume = selectedConfig.userVolume;
-              console.log(`Found exact match with OS=${apiOperatingSystem}, License=${apiLicense}`);
-              break;
+          // Try to find a configuration that matches our exact OS, license AND volume preferences
+          if (isRootVolumeValid && isUserVolumeValid) {
+            for (const item of aggregationData.aggregations) {
+              if (item.selectors && 
+                  item.selectors["Bundle Description"] === matchingBundle &&
+                  item.selectors["Operating System"] === apiOperatingSystem &&
+                  item.selectors.License === apiLicense &&
+                  item.selectors.rootVolume === userSelectedRootVolume &&
+                  item.selectors.userVolume === userSelectedUserVolume) {
+                
+                // We found a perfect match with our preferred volumes
+                selectedConfig = item.selectors;
+                selectedRootVolume = selectedConfig.rootVolume;
+                selectedUserVolume = selectedConfig.userVolume;
+                foundExactVolumeMatch = true;
+                console.log(`Found exact match with OS=${apiOperatingSystem}, License=${apiLicense}, Root=${selectedRootVolume}, User=${selectedUserVolume}`);
+                break;
+              }
             }
           }
           
-          // If no exact match with OS and license, fall back to any matching bundle
+          // If no exact match with OS, license and volumes, try finding one with matching OS and license
           if (!selectedConfig) {
-            console.log(`No exact OS/License match found, using first available config`);
+            console.log(`No exact volume match found, looking for OS/License match only`);
+            for (const item of aggregationData.aggregations) {
+              if (item.selectors && 
+                  item.selectors["Bundle Description"] === matchingBundle &&
+                  item.selectors["Operating System"] === apiOperatingSystem &&
+                  item.selectors.License === apiLicense) {
+                // We found an OS/license match
+                selectedConfig = item.selectors;
+                selectedRootVolume = selectedConfig.rootVolume;
+                selectedUserVolume = selectedConfig.userVolume;
+                console.log(`Found OS/License match with fallback volumes: Root=${selectedRootVolume}, User=${selectedUserVolume}`);
+                break;
+              }
+            }
+          }
+          
+          // If still no match, fall back to any matching bundle
+          if (!selectedConfig) {
+            console.log(`No OS/License match found, using first available config`);
             for (const item of aggregationData.aggregations) {
               if (item.selectors && item.selectors["Bundle Description"] === matchingBundle) {
                 selectedConfig = item.selectors;
@@ -293,12 +330,18 @@ export async function POST(request: Request) {
               "License": apiLicense
             };
             
-            // Use the volumes from the selected configuration, as these are guaranteed to work
-            formattedRootVolume = configToUse.rootVolume;
-            formattedUserVolume = configToUse.userVolume;
-            
-            // Log the available volumes for this configuration
-            console.log(`Using API-provided volumes: Root=${formattedRootVolume}, User=${formattedUserVolume}`);
+            // Use the volumes from the selected configuration, UNLESS we found an exact volume match
+            if (foundExactVolumeMatch) {
+              // If we found an exact match, use the user's chosen volumes which are now confirmed valid
+              formattedRootVolume = userSelectedRootVolume;
+              formattedUserVolume = userSelectedUserVolume;
+              console.log(`Using user-selected volumes (verified valid): Root=${formattedRootVolume}, User=${formattedUserVolume}`);
+            } else {
+              // If no exact match, fall back to the API-provided volumes
+              formattedRootVolume = configToUse.rootVolume;
+              formattedUserVolume = configToUse.userVolume;
+              console.log(`Using API-provided volumes as fallback: Root=${formattedRootVolume}, User=${formattedUserVolume}`);
+            }
             
             // Construct the pricing URL with exactly the values from the API
             const urlParams = [
@@ -518,7 +561,14 @@ export async function POST(request: Request) {
         rootVolume: config.rootVolume,
         userVolume: config.userVolume,
         bundleStorage: config.bundleSpecs?.storage,
-      }
+      },
+      // Include the actual values used for the API call
+      apiConfig: {
+        rootVolume: formattedRootVolume,
+        userVolume: formattedUserVolume,
+      },
+      // Include a flag to indicate if the user's volume selections were honored
+      volumeSelectionHonored: selectedRootVolume === formattedRootVolume && selectedUserVolume === formattedUserVolume,
     });
     
     // Log the final cost summary
