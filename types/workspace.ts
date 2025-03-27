@@ -113,6 +113,9 @@ export interface WorkSpaceConfig {
   isPoolCalculation?: boolean
   // License field used internally by API
   license?: string
+  // Internal fields for state management
+  _lastUpdated?: number;
+  _updateTimestamp?: number;
 }
 
 // Pricing estimate returned from the API

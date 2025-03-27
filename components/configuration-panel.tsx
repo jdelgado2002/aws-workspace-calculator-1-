@@ -275,15 +275,27 @@ export default function ConfigurationPanel({
       
       console.log(`Updating pool pricing for license ${licenseValue}:`, pricing);
       
-      // Update the license and also update the price in the bundle specs
+      // Update bundle specs with the appropriate price based on license
+      const updatedBundleSpecs = config.poolBundleSpecs 
+        ? { 
+            ...config.poolBundleSpecs,
+            // We don't modify the specs directly, let the calculation handle it
+          } 
+        : undefined;
+      
+      // Update the license and apply the calculation in cost-summary-panel
       onConfigChange({ 
         poolLicense: licenseValue,
-        // Optionally update the displayed price if needed
-        // This approach depends on your specific implementation
+        // Add an empty timestamp to force a re-render and recalculation
+        // This is a hack but effective way to trigger the useEffect in the parent component
+        _updateTimestamp: Date.now()
       });
     } else {
       // If no license-specific pricing, just update the license
-      onConfigChange({ poolLicense: licenseValue });
+      onConfigChange({ 
+        poolLicense: licenseValue,
+        _updateTimestamp: Date.now() // Force update
+      });
     }
   };
 

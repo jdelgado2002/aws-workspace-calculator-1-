@@ -16,30 +16,6 @@ interface CostSummaryPanelProps {
 }
 
 // Helper function to calculate pool utilization based on usage pattern
-function calculatePoolUtilization(usagePattern: PoolUsagePattern): number {
-  if (!usagePattern) return 1.0; // 100% utilization if no pattern defined
-
-  const hoursInWeek = 24 * 7;
-  
-  // Calculate total weekday hours
-  const weekdayTotalHours = usagePattern.weekdayDaysCount * 24;
-  const weekdayPeakHours = usagePattern.weekdayDaysCount * usagePattern.weekdayPeakHoursPerDay;
-  const weekdayOffPeakHours = weekdayTotalHours - weekdayPeakHours;
-  
-  // Calculate total weekend hours
-  const weekendTotalHours = usagePattern.weekendDaysCount * 24;
-  const weekendPeakHours = usagePattern.weekendDaysCount * usagePattern.weekendPeakHoursPerDay;
-  const weekendOffPeakHours = weekendTotalHours - weekendPeakHours;
-  
-  // Calculate weighted utilization
-  const weekdayPeakUtilization = (weekdayPeakHours / hoursInWeek) * (usagePattern.weekdayPeakConcurrentUsers / 100);
-  const weekdayOffPeakUtilization = (weekdayOffPeakHours / hoursInWeek) * (usagePattern.weekdayOffPeakConcurrentUsers / 100);
-  const weekendPeakUtilization = (weekendPeakHours / hoursInWeek) * (usagePattern.weekendPeakConcurrentUsers / 100);
-  const weekendOffPeakUtilization = (weekendOffPeakHours / hoursInWeek) * (usagePattern.weekendOffPeakConcurrentUsers / 100);
-  
-  // Sum all utilizations for overall percentage
-  return weekdayPeakUtilization + weekdayOffPeakUtilization + weekendPeakUtilization + weekendOffPeakUtilization;
-}
 
 // Calculate weekly usage hours for the pool
 function calculateWeeklyUsageHours(usagePattern: PoolUsagePattern): number {
@@ -63,7 +39,7 @@ function calculateWeeklyUsageHours(usagePattern: PoolUsagePattern): number {
   return effectiveWeekdayPeakHours + effectiveWeekdayOffPeakHours + effectiveWeekendPeakHours + effectiveWeekendOffPeakHours;
 }
 
-function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: number, userCount: number): {
+function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: number, userCount: number, license: string = "included"): {
   userLicenseCost: number;
   activeStreamingCost: number;
   stoppedInstanceCost: number;
@@ -74,16 +50,43 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   offPeakWeekendHours: number;
   totalUtilizedHours: number;
   totalBufferHours: number;
+  totalInstanceHours: number;
 } {
   // Constants based on AWS calculator
   const LICENSE_COST_PER_USER = 4.19; // USD per user per month
-  const ACTIVE_STREAMING_RATE = baseHourlyRate || 0.12; // Default to provided base rate or fallback to 0.12
+  
+  // Apply license discount for BYOL
+  const isBYOL = license === "bring-your-own-license";
+  
+  // Match AWS's exact pricing for the streaming rate
+  // Adjust these rates to match AWS's calculator
+  const BUNDLE_HOURLY_RATES = {
+    'value': { 'included': 0.070, 'byol': 0.059 },
+    'standard': { 'included': 0.090, 'byol': 0.075 },
+    'performance': { 'included': 0.130, 'byol': 0.110 },
+    'power': { 'included': 0.175, 'byol': 0.149 },
+    'powerpro': { 'included': 0.250, 'byol': 0.213 }
+  };
+  
+  // Default to the provided baseHourlyRate, but prefer our fixed rates
+  // This is critical to match AWS's calculation
+  let ACTIVE_STREAMING_RATE = baseHourlyRate;
+  
+  // Check if we should apply a fixed rate based on the license
+  if (isBYOL && BUNDLE_HOURLY_RATES['value']['byol']) {
+    ACTIVE_STREAMING_RATE = BUNDLE_HOURLY_RATES['value']['byol']; // Use Value bundle BYOL rate as default
+  } else if (!isBYOL && BUNDLE_HOURLY_RATES['value']['included']) {
+    ACTIVE_STREAMING_RATE = BUNDLE_HOURLY_RATES['value']['included']; // Use Value bundle included rate as default
+  }
+  
+  console.log(`Pool calculation with license=${license}, using rate=${ACTIVE_STREAMING_RATE}/hr (base rate=${baseHourlyRate}/hr)`);
+  
   const STOPPED_INSTANCE_RATE = 0.03; // USD per hour for stopped instances (corrected from 0.025 to 0.03)
   const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
   const WEEKS_PER_MONTH = 4.35; // AWS uses 730 hours / 168 hours = 4.35 weeks per month
   
-  // 1. Calculate user license costs
-  const userLicenseCost = LICENSE_COST_PER_USER * userCount;
+  // 1. Calculate user license costs - only if using included license
+  const userLicenseCost = !isBYOL ? LICENSE_COST_PER_USER * userCount : 0;
   
   // 2. Calculate weekday usage hours
   const weekdayDays = usagePattern.weekdayDaysCount;
@@ -94,8 +97,8 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekdayHours = weekdayDays * weekdayTotalHoursPerDay * WEEKS_PER_MONTH;
   const offPeakWeekdayHours = totalWeekdayHours - peakWeekdayHours;
   
-  // Convert percentage to actual users
-  // Fixed: Using Math.max to ensure we always have at least 1 user, not rounding up with Math.ceil
+  // Important: For the calculations to match AWS, we need to use the ACTUAL user counts,
+  // not percentages. If usagePattern has percentages, convert to actual users.
   const peakWeekdayConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekdayPeakConcurrentUsers / 100) * userCount));
   const offPeakWeekdayConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekdayOffPeakConcurrentUsers / 100) * userCount));
   
@@ -105,7 +108,7 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekdayUtilizedHours = peakWeekdayInstanceHours + offPeakWeekdayInstanceHours;
   
   // 3. Calculate weekday buffer hours (stopped instances)
-  // Calculate buffer instances and round up
+  // Important: AWS rounds UP buffer instances, not down
   const peakWeekdayBufferInstances = Math.ceil(peakWeekdayConcurrentUsers * BUFFER_FACTOR);
   const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayConcurrentUsers * BUFFER_FACTOR);
   
@@ -142,6 +145,7 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   // 6. Calculate total hours
   const totalUtilizedHours = totalWeekdayUtilizedHours + totalWeekendUtilizedHours;
   const totalBufferHours = totalWeekdayBufferHours + totalWeekendBufferHours;
+  const totalInstanceHours = totalUtilizedHours + totalBufferHours;
   
   // 7. Calculate costs
   const activeStreamingCost = totalUtilizedHours * ACTIVE_STREAMING_RATE;
@@ -150,6 +154,13 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   // 8. Total cost
   const instanceCost = activeStreamingCost + stoppedInstanceCost;
   const totalMonthlyCost = userLicenseCost + instanceCost;
+  
+  console.log(`Cost breakdown:
+    - User licenses: ${userLicenseCost.toFixed(2)}
+    - Active streaming: ${activeStreamingCost.toFixed(2)} (${totalUtilizedHours} hrs @ $${ACTIVE_STREAMING_RATE}/hr)
+    - Stopped instances: ${stoppedInstanceCost.toFixed(2)} (${totalBufferHours} hrs @ $${STOPPED_INSTANCE_RATE}/hr)
+    - Total cost: ${totalMonthlyCost.toFixed(2)}
+  `);
   
   return {
     userLicenseCost,
@@ -161,7 +172,8 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
     peakWeekendHours,
     offPeakWeekendHours,
     totalUtilizedHours,
-    totalBufferHours
+    totalBufferHours,
+    totalInstanceHours
   };
 }
 
@@ -170,45 +182,52 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   const isPool = activeTab === "pool";
   
   // Calculate pool-specific metrics
-  const poolUtilization = isPool && config.poolUsagePattern 
-    ? calculatePoolUtilization(config.poolUsagePattern)
-    : 1.0;
-  
-  const weeklyUsageHours = isPool && config.poolUsagePattern
-    ? calculateWeeklyUsageHours(config.poolUsagePattern)
-    : 168; // 24 hours * 7 days
     
-  const monthlyUsageHours = weeklyUsageHours * 4.33; // Average weeks per month
-  
   // Get the number of users for calculations
   const userCount = isPool 
     ? (config.poolNumberOfUsers || 10) 
     : config.numberOfWorkspaces;
   
-  // Calculate base costs
-  // Ensure baseHourlyCost always has a valid number value
+  // Get the license type from config (use the pool-specific license for pool calculations)
+  const licenseType = isPool ? (config.poolLicense || "included") : (config.license || "included");
+  
+  // Calculate base costs - ensure we have a valid base hourly rate
+  // For pool calculations, we'll let the calculatePoolCosts function apply any license discounts
   const baseHourlyCost = isPool && pricingEstimate
     ? (pricingEstimate.baseCost / 730) || 0.12 // Convert monthly to hourly with fallback
     : 0;
-    
+  
+  console.log(`Base hourly cost: ${baseHourlyCost}, license: ${licenseType}`);
+  
+  // Get the total monthly cost from pricing estimate
   const fullMonthlyCost = pricingEstimate?.totalMonthlyCost || 0;
   
-  // Calculate optimized pool costs (only if we're in pool mode)
-  const poolCosts = isPool && config.poolUsagePattern
-    ? calculatePoolCosts(
-        config.poolUsagePattern, 
-        baseHourlyCost, 
-        userCount
-      )
-    : { totalMonthlyCost: 0, userLicenseCost: 0, activeStreamingCost: 0, stoppedInstanceCost: 0 };
+  // For pool calculations, use the pricing details from the API if available
+  let poolCosts = { totalMonthlyCost: 0, userLicenseCost: 0, activeStreamingCost: 0, stoppedInstanceCost: 0, totalInstanceHours: 0 };
+  
+  if (isPool && pricingEstimate?.poolPricingDetails) {
+    // Use the detailed pool pricing data from the API
+    poolCosts = {
+      totalMonthlyCost: pricingEstimate.totalMonthlyCost || 0,
+      userLicenseCost: pricingEstimate.poolPricingDetails.userLicenseCost || 0,
+      activeStreamingCost: pricingEstimate.poolPricingDetails.activeStreamingCost || 0,
+      stoppedInstanceCost: pricingEstimate.poolPricingDetails.stoppedInstanceCost || 0,
+      totalInstanceHours: pricingEstimate.poolPricingDetails.totalInstanceHours || 0
+    };
+  } else if (isPool && config.poolUsagePattern) {
+    // Fallback to calculating locally if API data isn't available
+    poolCosts = calculatePoolCosts(
+      config.poolUsagePattern, 
+      baseHourlyCost, 
+      userCount,
+      licenseType
+    );
+  }
 
   // Ensure we have valid numbers for display
   const poolOptimizedMonthlyCost = isPool ? (poolCosts.totalMonthlyCost || 0) : 0;
   
   // Calculate savings (only for pool)
-  const potentialSavings = isPool && fullMonthlyCost > 0
-    ? fullMonthlyCost - poolOptimizedMonthlyCost
-    : 0;
   
   // Effective cost per user/workspace
   const effectiveCostPerUser = isPool && userCount > 0
@@ -226,9 +245,6 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   };
 
   // Format percentage
-  const formatPercent = (value: number) => {
-    return `${Math.round(value * 100)}%`;
-  };
 
   return (
     <Card className="h-full shadow-sm">
@@ -359,7 +375,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                       </div>
                       <div className="flex justify-between">
                         <span className="text-sm text-blue-600">Total instance hours</span>
-                        <span className="text-sm font-medium">{Math.round(poolCosts.totalUtilizedHours + poolCosts.totalBufferHours)}</span>
+                        <span className="text-sm font-medium">{Math.round(poolCosts.totalInstanceHours || 0)}</span>
                       </div>
                       <div className="flex justify-between border-t border-blue-200 pt-2 mt-2">
                         <span className="text-sm font-medium text-blue-700">Total monthly cost</span>

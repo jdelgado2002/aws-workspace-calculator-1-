@@ -62,6 +62,19 @@ export default function WorkSpaceCalculator() {
   const onConfigChange = useCallback((newConfig: Partial<WorkSpaceConfig>) => {
     // Update config based on the changes
     setConfig(prevConfig => {
+      // Handle license changes to ensure they trigger recalculation
+      if (newConfig.poolLicense !== undefined || newConfig.license !== undefined) {
+        console.log("License updated, triggering price recalculation");
+        // Force a recalculation by setting a timestamp
+        // This ensures the debounced effect will run
+        const configWithTimestamp = { 
+          ...prevConfig, 
+          ...newConfig,
+          _lastUpdated: Date.now() 
+        };
+        return configWithTimestamp;
+      }
+      
       // Special case for bundle changes
       if (newConfig.bundleId && newConfig.bundleId !== prevConfig.bundleId) {
         // Find the selected bundle
@@ -192,7 +205,7 @@ export default function WorkSpaceCalculator() {
               bundleSpecs: debouncedConfig.poolBundleSpecs || debouncedConfig.bundleSpecs,
               operatingSystem: debouncedConfig.poolOperatingSystem || debouncedConfig.operatingSystem,
               // Important: Use the pool license configuration
-              license: debouncedConfig.poolLicense || "included",
+              license: debouncedConfig.poolLicense || "included", 
               numberOfWorkspaces: debouncedConfig.poolNumberOfUsers || debouncedConfig.numberOfWorkspaces,
               // Set a special flag to indicate this is a pool calculation
               isPoolCalculation: true
