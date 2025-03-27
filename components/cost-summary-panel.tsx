@@ -3,8 +3,9 @@
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert" // Add this import
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Info, MonitorSmartphone, Users } from "lucide-react"
+import { Info, MonitorSmartphone, Users, Database, AlertTriangle } from "lucide-react" // Add AlertTriangle icon
 import type { WorkSpaceConfig, PricingEstimate, PoolUsagePattern } from "@/types/workspace"
 
 interface CostSummaryPanelProps {
@@ -241,7 +242,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
         {/* Show a warning if volume selections weren't honored */}
         {pricingEstimate && !pricingEstimate.volumeSelectionHonored && 
           config.rootVolume && config.userVolume && (
-          <Alert variant="warning" className="mb-4">
+          <Alert className="mb-4">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
               Your selected volumes (Root: {config.rootVolume}GB, User: {config.userVolume}GB) were 
