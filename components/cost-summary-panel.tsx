@@ -77,8 +77,8 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
 } {
   // Constants based on AWS calculator
   const LICENSE_COST_PER_USER = 4.19; // USD per user per month
-  const ACTIVE_STREAMING_RATE = baseHourlyRate; // Default to provided base rate
-  const STOPPED_INSTANCE_RATE = 0.025; // USD per hour for stopped instances
+  const ACTIVE_STREAMING_RATE = baseHourlyRate || 0.12; // Default to provided base rate or fallback to 0.12
+  const STOPPED_INSTANCE_RATE = 0.03; // USD per hour for stopped instances (corrected from 0.025 to 0.03)
   const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
   const WEEKS_PER_MONTH = 4.35; // AWS uses 730 hours / 168 hours = 4.35 weeks per month
   
@@ -95,21 +95,19 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const offPeakWeekdayHours = totalWeekdayHours - peakWeekdayHours;
   
   // Convert percentage to actual users
-  const peakWeekdayConcurrentUsers = Math.ceil((usagePattern.weekdayPeakConcurrentUsers / 100) * userCount);
-  const offPeakWeekdayConcurrentUsers = Math.ceil((usagePattern.weekdayOffPeakConcurrentUsers / 100) * userCount);
+  // Fixed: Using Math.max to ensure we always have at least 1 user, not rounding up with Math.ceil
+  const peakWeekdayConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekdayPeakConcurrentUsers / 100) * userCount));
+  const offPeakWeekdayConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekdayOffPeakConcurrentUsers / 100) * userCount));
   
-  // Ensure at least 1 instance
-  const peakWeekdayInstances = Math.max(1, peakWeekdayConcurrentUsers);
-  const offPeakWeekdayInstances = Math.max(1, offPeakWeekdayConcurrentUsers);
-  
-  // Calculate utilized instance hours
-  const peakWeekdayInstanceHours = peakWeekdayInstances * peakWeekdayHours;
-  const offPeakWeekdayInstanceHours = offPeakWeekdayInstances * offPeakWeekdayHours;
+  // Calculate utilized instance hours - direct multiplication of users and hours
+  const peakWeekdayInstanceHours = peakWeekdayConcurrentUsers * peakWeekdayHours;
+  const offPeakWeekdayInstanceHours = offPeakWeekdayConcurrentUsers * offPeakWeekdayHours;
   const totalWeekdayUtilizedHours = peakWeekdayInstanceHours + offPeakWeekdayInstanceHours;
   
   // 3. Calculate weekday buffer hours (stopped instances)
-  const peakWeekdayBufferInstances = Math.ceil(peakWeekdayInstances * BUFFER_FACTOR);
-  const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayInstances * BUFFER_FACTOR);
+  // Calculate buffer instances and round up
+  const peakWeekdayBufferInstances = Math.ceil(peakWeekdayConcurrentUsers * BUFFER_FACTOR);
+  const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayConcurrentUsers * BUFFER_FACTOR);
   
   const peakWeekdayBufferHours = peakWeekdayBufferInstances * peakWeekdayHours;
   const offPeakWeekdayBufferHours = offPeakWeekdayBufferInstances * offPeakWeekdayHours;
@@ -124,22 +122,18 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekendHours = weekendDays * weekendTotalHoursPerDay * WEEKS_PER_MONTH;
   const offPeakWeekendHours = totalWeekendHours - peakWeekendHours;
   
-  // Convert percentage to actual users
-  const peakWeekendConcurrentUsers = Math.ceil((usagePattern.weekendPeakConcurrentUsers / 100) * userCount);
-  const offPeakWeekendConcurrentUsers = Math.ceil((usagePattern.weekendOffPeakConcurrentUsers / 100) * userCount);
-  
-  // Ensure at least 1 instance
-  const peakWeekendInstances = Math.max(1, peakWeekendConcurrentUsers);
-  const offPeakWeekendInstances = Math.max(1, offPeakWeekendConcurrentUsers);
+  // Convert percentage to actual users - same approach as weekday
+  const peakWeekendConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekendPeakConcurrentUsers / 100) * userCount));
+  const offPeakWeekendConcurrentUsers = Math.max(1, Math.floor((usagePattern.weekendOffPeakConcurrentUsers / 100) * userCount));
   
   // Calculate utilized instance hours
-  const peakWeekendInstanceHours = peakWeekendInstances * peakWeekendHours;
-  const offPeakWeekendInstanceHours = offPeakWeekendInstances * offPeakWeekendHours;
+  const peakWeekendInstanceHours = peakWeekendConcurrentUsers * peakWeekendHours;
+  const offPeakWeekendInstanceHours = offPeakWeekendConcurrentUsers * offPeakWeekendHours;
   const totalWeekendUtilizedHours = peakWeekendInstanceHours + offPeakWeekendInstanceHours;
   
   // 5. Calculate weekend buffer hours (stopped instances)
-  const peakWeekendBufferInstances = Math.ceil(peakWeekendInstances * BUFFER_FACTOR);
-  const offPeakWeekendBufferInstances = Math.ceil(offPeakWeekendInstances * BUFFER_FACTOR);
+  const peakWeekendBufferInstances = Math.ceil(peakWeekendConcurrentUsers * BUFFER_FACTOR);
+  const offPeakWeekendBufferInstances = Math.ceil(offPeakWeekendConcurrentUsers * BUFFER_FACTOR);
   
   const peakWeekendBufferHours = peakWeekendBufferInstances * peakWeekendHours;
   const offPeakWeekendBufferHours = offPeakWeekendBufferInstances * offPeakWeekendHours;
@@ -192,8 +186,9 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
     : config.numberOfWorkspaces;
   
   // Calculate base costs
+  // Ensure baseHourlyCost always has a valid number value
   const baseHourlyCost = isPool && pricingEstimate
-    ? (pricingEstimate.baseCost / 730) // Convert monthly to hourly
+    ? (pricingEstimate.baseCost / 730) || 0.12 // Convert monthly to hourly with fallback
     : 0;
     
   const fullMonthlyCost = pricingEstimate?.totalMonthlyCost || 0;
@@ -207,10 +202,11 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
       )
     : { totalMonthlyCost: 0, userLicenseCost: 0, activeStreamingCost: 0, stoppedInstanceCost: 0 };
 
-  const poolOptimizedMonthlyCost = isPool ? poolCosts.totalMonthlyCost : 0;
+  // Ensure we have valid numbers for display
+  const poolOptimizedMonthlyCost = isPool ? (poolCosts.totalMonthlyCost || 0) : 0;
   
   // Calculate savings (only for pool)
-  const potentialSavings = isPool
+  const potentialSavings = isPool && fullMonthlyCost > 0
     ? fullMonthlyCost - poolOptimizedMonthlyCost
     : 0;
   
