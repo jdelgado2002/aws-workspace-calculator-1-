@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
+import { Input } from "@/components/ui/input"
 import { Cpu, MemoryStick, HardDrive, MonitorSmartphone, Users } from "lucide-react"
 import type { WorkSpaceConfig, ConfigOptions, PoolUsagePattern } from "@/types/workspace"
 import { getBundlesForRegion } from "@/app/actions/updateBundles"
@@ -67,6 +68,7 @@ export default function ConfigurationPanel({
   // Extract options from configOptions - ensure they're available
   const regions = configOptions?.regions || []
   const operatingSystems = configOptions?.operatingSystems || []
+  const licenseOptions = configOptions?.licenseOptions || []
   const runningModes = configOptions?.runningModes || []
   const billingOptions = configOptions?.billingOptions || []
   
@@ -255,6 +257,37 @@ export default function ConfigurationPanel({
     }
   };
 
+  // Add handler for license changes to update pricing dynamically
+  const handlePoolLicenseChange = (licenseValue: string) => {
+    // Find the selected bundle
+    const selectedBundle = poolBundles.find(b => b.id === config.poolBundleId);
+    
+    // If bundle has license-specific pricing and licensePricing is available
+    if (selectedBundle?.licensePricing) {
+      // Get the pricing for the selected license
+      const pricing = licenseValue === "bring-your-own-license" 
+        ? selectedBundle.licensePricing.byol
+        : selectedBundle.licensePricing.included;
+      
+      console.log(`Updating pool pricing for license ${licenseValue}:`, pricing);
+      
+      // Update the license and also update the price in the bundle specs
+      onConfigChange({ 
+        poolLicense: licenseValue,
+        // Optionally update the displayed price if needed
+        // This approach depends on your specific implementation
+      });
+    } else {
+      // If no license-specific pricing, just update the license
+      onConfigChange({ poolLicense: licenseValue });
+    }
+  };
+
+  // Add a handler for license changes in Core
+  const handleLicenseChange = (licenseValue: string) => {
+    onConfigChange({ license: licenseValue });
+  };
+
   // Only render once client-side to prevent hydration mismatch
   if (!isMounted) {
     return (
@@ -278,7 +311,7 @@ export default function ConfigurationPanel({
 
         <Tabs defaultValue="core" onValueChange={handleTabChange}>
           <TabsList className="grid w-full grid-cols-2 mb-6">
-            <TabsTrigger value="core">Workpsaces Core</TabsTrigger>
+            <TabsTrigger value="core">WorkSpaces Core</TabsTrigger>
             <TabsTrigger value="pool">WorkSpaces Pool</TabsTrigger>
           </TabsList>
 
@@ -392,6 +425,38 @@ export default function ConfigurationPanel({
             </div>
 
             <div>
+              <Label htmlFor="license">License Type</Label>
+              <Select
+                value={config.license || "included"}
+                onValueChange={handleLicenseChange}
+                disabled={isLoading}
+              >
+                <SelectTrigger id="license" className="w-full">
+                  <SelectValue placeholder="Select license type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {licenseOptions && licenseOptions.length > 0 ? (
+                    licenseOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="included">Included</SelectItem>
+                      <SelectItem value="bring-your-own-license">Bring Your Own License</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+              {config.operatingSystem === "windows" && config.license === "bring-your-own-license" && (
+                <p className="text-xs text-amber-600 mt-1">
+                  You'll need valid Windows licenses for your BYOL deployment
+                </p>
+              )}
+            </div>
+
+            <div>
               <Label htmlFor="runningMode">Running Mode</Label>
               <Select
                 value={config.runningMode}
@@ -462,6 +527,7 @@ export default function ConfigurationPanel({
                   console.log("Pool region selected:", value)
                   setPoolRegion(value)
                   onConfigChange({ poolRegion: value })
+                  loadPoolBundles(value)
                 }}
                 disabled={isLoadingPoolOptions}
               >
@@ -618,7 +684,7 @@ export default function ConfigurationPanel({
               <Label htmlFor="poolLicense">License Type</Label>
               <Select
                 value={config.poolLicense}
-                onValueChange={(value) => onConfigChange({ poolLicense: value })}
+                onValueChange={handlePoolLicenseChange}
                 disabled={isLoadingPoolBundles || poolLicenseOptions.length === 0}
               >
                 <SelectTrigger id="poolLicense" className="w-full">
@@ -666,4 +732,3 @@ export default function ConfigurationPanel({
     </Card>
   )
 }
-

@@ -299,6 +299,10 @@ export async function GET(request: Request) {
           console.log(`STORAGE VALUE for ${description}: ${bundleSpecs.storage} GB`);
           
           const bundleId = bundleSpecs.type.toLowerCase().replace(/\./g, '-');
+          const bundleName = description as string;
+
+          // Add explicit logging to verify mapping
+          console.log(`Mapped bundle: ID=${bundleId}, Name=${bundleName}`);
           
           // Log the resulting specs to confirm storage value
           console.log(`Bundle Specs Debug - ${description as string}:`, {
@@ -355,11 +359,13 @@ export async function GET(request: Request) {
           label: volume as string,
         }));
         
-        // Convert OS options to dropdown format
-        operatingSystems = Array.from(uniqueOS).map(os => ({
-          value: (os as string).toLowerCase(),
-          label: os as string === "Any" ? "BYOL" : os as string,
-        }));
+        // Convert OS options to dropdown format - filter out "Any" which is a license type, not an OS
+        operatingSystems = Array.from(uniqueOS)
+          .filter(os => os !== "Any") // Filter out "Any" as it's not a real OS
+          .map(os => ({
+            value: (os as string).toLowerCase(),
+            label: os as string,
+          }));
         
         // Convert license options to dropdown format
         licenseOptions = Array.from(uniqueLicenses).map(license => ({

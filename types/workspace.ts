@@ -33,6 +33,21 @@ export interface ConfigOptions {
     specs: BundleSpecs
     type: string
     selectors?: any
+    // Add license-specific pricing
+    licensePricing?: {
+      included: {
+        hourlyRate: number
+        monthlyRate: number
+        displayPrice: string
+        displayHourlyPrice: string
+      }
+      byol: {
+        hourlyRate: number
+        monthlyRate: number
+        displayPrice: string
+        displayHourlyPrice: string
+      }
+    }
   }[]
   poolOperatingSystems?: {
     value: string
@@ -77,6 +92,7 @@ export interface WorkSpaceConfig {
   rootVolume?: string
   userVolume?: string
   operatingSystem: string
+  license?: string // Add this to support Core licensing
   runningMode: string
   numberOfWorkspaces: number
   billingOption: string
@@ -93,6 +109,10 @@ export interface WorkSpaceConfig {
   poolNumberOfUsers?: number
   // Pool usage pattern
   poolUsagePattern?: PoolUsagePattern
+  // Flag to indicate pool calculation in API calls
+  isPoolCalculation?: boolean
+  // License field used internally by API
+  license?: string
 }
 
 // Pricing estimate returned from the API

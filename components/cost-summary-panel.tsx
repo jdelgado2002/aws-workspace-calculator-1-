@@ -309,6 +309,11 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                         (config.poolLicense === 'included' ? 'Included' : 
                          config.poolLicense === 'bring-your-own-license' ? 'BYOL' : 
                          config.poolLicense) : '-'}
+                      {pricingEstimate?.license && (
+                        <span className="ml-1 text-amber-600">
+                          (Using {pricingEstimate.license})
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div className="flex justify-between">

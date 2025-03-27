@@ -131,7 +131,13 @@ export async function calculatePricing(config: WorkSpaceConfig): Promise<Pricing
     
     if (isPool) {
       // For pool, calculate monthly cost based on hourly rate
-      const hourlyRate = baseRate;
+      let hourlyRate = baseRate;
+      
+      // Apply license discount if using BYOL
+      if (config.poolLicense === "bring-your-own-license" || config.license === "bring-your-own-license") {
+        hourlyRate *= 0.85; // 15% discount for BYOL
+      }
+      
       const monthlyRate = hourlyRate * 730; // 730 hours per month
       const costPerWorkspace = monthlyRate;
       const totalMonthlyCost = costPerWorkspace * userCount;

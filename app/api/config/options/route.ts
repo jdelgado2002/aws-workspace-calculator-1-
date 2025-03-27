@@ -314,11 +314,21 @@ export async function GET() {
           label: volume as string,
         }));
         
-        // Convert OS options to dropdown format
-        operatingSystems = Array.from(uniqueOS).map(os => ({
-          value: (os as string).toLowerCase(),
-          label: os as string === "Any" ? "BYOL" : os as string,
-        }));
+        // Convert OS options to dropdown format - filter out "Any" which is a license type, not an OS
+        operatingSystems = Array.from(uniqueOS)
+          .filter(os => os !== "Any") // Filter out "Any" as it's not a real OS
+          .map(os => ({
+            value: (os as string).toLowerCase(),
+            label: os as string,
+          }));
+        
+        // Make sure the licenseOptions array includes the BYOL option derived from "Any" OS
+        if (uniqueOS.has("Any") && !Array.from(uniqueLicenses).some(license => license === "Bring Your Own License")) {
+          licenseOptions.push({
+            value: "bring-your-own-license",
+            label: "Bring Your Own License (BYOL)",
+          });
+        }
         
         // Convert license options to dropdown format
         licenseOptions = Array.from(uniqueLicenses).map(license => ({

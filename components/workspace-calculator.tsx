@@ -22,6 +22,7 @@ const defaultConfig: WorkSpaceConfig = {
   rootVolume: "80",
   userVolume: "10", 
   operatingSystem: "windows",
+  license: "included", // Add default license
   runningMode: "always-on",
   numberOfWorkspaces: 1,
   billingOption: "monthly",
@@ -150,12 +151,19 @@ export default function WorkSpaceCalculator() {
               bundleId: debouncedConfig.poolBundleId || debouncedConfig.bundleId,
               bundleSpecs: debouncedConfig.poolBundleSpecs || debouncedConfig.bundleSpecs,
               operatingSystem: debouncedConfig.poolOperatingSystem || debouncedConfig.operatingSystem,
+              // Important: Use the pool license configuration
               license: debouncedConfig.poolLicense || "included",
               numberOfWorkspaces: debouncedConfig.poolNumberOfUsers || debouncedConfig.numberOfWorkspaces,
               // Set a special flag to indicate this is a pool calculation
               isPoolCalculation: true
             } 
           : debouncedConfig;
+        
+        console.log("Sending configuration to pricing API:", {
+          bundleId: configToUse.bundleId,
+          license: configToUse.license,
+          isPool: activeTab === "pool"
+        });
         
         const estimate = await calculatePricing(configToUse)
         setPricingEstimate(estimate)

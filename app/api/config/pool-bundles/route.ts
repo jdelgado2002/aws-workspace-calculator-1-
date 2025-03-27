@@ -112,61 +112,81 @@ export async function GET(request: Request) {
             // If we've already priced this bundle, skip
             if (bundlePrices.has(bundleKey)) continue;
             
-            // Construct the pricing URL to get actual prices
-            const urlParams = [
-              encodedRegion,
-              encodeURIComponent(config.Bundle),
-              encodeURIComponent(config.vCPU),
-              encodeURIComponent(config.rootVolume),
-              encodeURIComponent(config.Memory),
-              encodeURIComponent(config["Operating System"]),
-              encodeURIComponent(config.License),
-              encodeURIComponent(config["Running Mode"]),
-              encodeURIComponent(config["Product Family"])
-            ];
+            // We'll fetch pricing for both license types to compare
+            const licenseTypes = ["Included", "Bring Your Own License"];
+            const pricingByLicense = {};
             
-            const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-pools-calc/${urlParams.join('/')}/index.json`;
-            
-            console.log(`[Pool API] Fetching pricing from URL: ${pricingUrl}`);
-            
-            const pricingData = await fetchAwsPricingData(
-              pricingUrl,
-              `Failed to fetch pricing for ${bundleKey} in ${regionName}`
-            );
-            
-            if (pricingData && pricingData.regions && pricingData.regions[regionName]) {
-              // Process the pricing data for this bundle
-              const regionData = pricingData.regions[regionName];
-              let hourlyRate = 0;
-              let unit = "";
+            // Fetch pricing for each license type
+            for (const licenseType of licenseTypes) {
+              // Construct the pricing URL to get actual prices
+              const urlParams = [
+                encodedRegion,
+                encodeURIComponent(config.Bundle),
+                encodeURIComponent(config.vCPU),
+                encodeURIComponent(config.rootVolume),
+                encodeURIComponent(config.Memory),
+                encodeURIComponent(config["Operating System"]),
+                encodeURIComponent(licenseType), // Use the specific license type we're checking
+                encodeURIComponent(config["Running Mode"]),
+                encodeURIComponent(config["Product Family"])
+              ];
               
-              // Extract hourly rate from the first pricing object
-              // Pool pricing uses hourly rates, so we need to calculate monthly cost
-              for (const [priceKey, priceInfo] of Object.entries(regionData)) {
-                const info = priceInfo as any;
-                hourlyRate = parseFloat(info.price);
-                unit = info.Unit || "hour";
+              const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-pools-calc/${urlParams.join('/')}/index.json`;
+              
+              console.log(`[Pool API] Fetching pricing for ${licenseType} from URL: ${pricingUrl}`);
+              
+              try {
+                const pricingData = await fetchAwsPricingData(
+                  pricingUrl,
+                  `Failed to fetch pricing for ${bundleKey} with license ${licenseType} in ${regionName}`
+                );
                 
-                // We only need the first price point since all configurations have a single hourly rate
-                break;
-              }
-              
-              // Calculate monthly cost (assuming 730 hours per month - AWS standard)
-              const monthlyRate = hourlyRate * 730;
-              
-              // Store the pricing information
-              bundlePrices.set(bundleKey, {
-                hourlyRate: hourlyRate,
-                monthlyRate: monthlyRate,
-                unit: unit,
-                config: {
-                  ...config,
-                  region: regionName
+                if (pricingData && pricingData.regions && pricingData.regions[regionName]) {
+                  // Process the pricing data for this bundle
+                  const regionData = pricingData.regions[regionName];
+                  let hourlyRate = 0;
+                  let unit = "";
+                  
+                  // Extract hourly rate from the first pricing object
+                  for (const [priceKey, priceInfo] of Object.entries(regionData)) {
+                    const info = priceInfo as any;
+                    hourlyRate = parseFloat(info.price);
+                    unit = info.Unit || "hour";
+                    
+                    // We only need the first price point
+                    break;
+                  }
+                  
+                  // Calculate monthly cost (assuming 730 hours per month - AWS standard)
+                  const monthlyRate = hourlyRate * 730;
+                  
+                  // Store the pricing information by license type
+                  pricingByLicense[licenseType] = {
+                    hourlyRate: hourlyRate,
+                    monthlyRate: monthlyRate,
+                    unit: unit,
+                  };
+                  
+                  console.log(`[Pool API] Fetched ${licenseType} price for ${bundleKey}: $${hourlyRate}/hr, $${monthlyRate.toFixed(2)}/mo`);
                 }
-              });
-              
-              console.log(`[Pool API] Fetched price for ${bundleKey}: $${hourlyRate}/hr, $${monthlyRate.toFixed(2)}/mo`);
+              } catch (error) {
+                console.error(`[Pool API] Error fetching ${licenseType} price for bundle ${config.Bundle}:`, error);
+                // Continue with next license type
+              }
             }
+            
+            // Store all pricing data for this bundle, with both license types if available
+            bundlePrices.set(bundleKey, {
+              ...pricingByLicense,
+              // For backward compatibility, use included license rates as the default
+              hourlyRate: pricingByLicense["Included"]?.hourlyRate || pricingByLicense["Bring Your Own License"]?.hourlyRate || 0,
+              monthlyRate: pricingByLicense["Included"]?.monthlyRate || pricingByLicense["Bring Your Own License"]?.monthlyRate || 0,
+              unit: pricingByLicense["Included"]?.unit || pricingByLicense["Bring Your Own License"]?.unit || "hour",
+              config: {
+                ...config,
+                region: regionName
+              }
+            });
           } catch (error) {
             console.error(`[Pool API] Error fetching price for bundle ${config.Bundle}:`, error);
             // Continue with next bundle
@@ -174,9 +194,11 @@ export async function GET(request: Request) {
         }
         
         // Debug output to verify pricing
-        console.log("[Pool API] All bundle prices:");
+        console.log("[Pool API] All bundle prices with license variations:");
         bundlePrices.forEach((price, bundleKey) => {
-          console.log(`${bundleKey}: $${price.hourlyRate}/hr, $${price.monthlyRate.toFixed(2)}/mo`);
+          console.log(`${bundleKey}:`);
+          console.log(`  Included: ${price["Included"]?.hourlyRate || 'N/A'}/hr, ${price["Included"]?.monthlyRate?.toFixed(2) || 'N/A'}/mo`);
+          console.log(`  BYOL: ${price["Bring Your Own License"]?.hourlyRate || 'N/A'}/hr, ${price["Bring Your Own License"]?.monthlyRate?.toFixed(2) || 'N/A'}/mo`);
         });
         
         // Convert bundle data to our format with actual prices
@@ -186,15 +208,28 @@ export async function GET(request: Request) {
           const displayName = `${bundleSpecs.type} (${bundleSpecs.vCPU} vCPU, ${bundleSpecs.memory}GB)`;
           const bundleKey = `${selectors.Bundle}-${selectors.vCPU}-${selectors.Memory}`;
           
-          // Get real price if available, otherwise use fallback
+          // Get price data for this bundle
           const priceData = bundlePrices.get(bundleKey);
           
-          // Format prices for consistency
-          const hourlyRate = priceData ? priceData.hourlyRate : getPoolBundlePrice(bundleSpecs) / 730;
-          const monthlyRate = priceData ? priceData.monthlyRate : getPoolBundlePrice(bundleSpecs);
+          // For each bundle, we'll now store pricing for both license types
+          const byolPricing = priceData && priceData["Bring Your Own License"];
+          const includedPricing = priceData && priceData["Included"];
+          
+          // Use fallback pricing if API pricing not available
+          const fallbackIncludedPrice = getPoolBundlePrice(bundleSpecs, "included");
+          const fallbackByolPrice = getPoolBundlePrice(bundleSpecs, "bring-your-own-license");
+          
+          // Store the base pricing (default to included license)
+          const hourlyRate = includedPricing?.hourlyRate || (priceData?.hourlyRate || fallbackIncludedPrice / 730);
+          const monthlyRate = includedPricing?.monthlyRate || (priceData?.monthlyRate || fallbackIncludedPrice);
+          
+          // Store the BYOL pricing separately
+          const byolHourlyRate = byolPricing?.hourlyRate || fallbackByolPrice / 730;
+          const byolMonthlyRate = byolPricing?.monthlyRate || fallbackByolPrice;
           
           // Ensure consistent price formatting
           const formattedMonthlyPrice = formatPriceForStorage(monthlyRate);
+          const formattedByolMonthlyPrice = formatPriceForStorage(byolMonthlyRate);
           
           return {
             id: bundleId,
@@ -207,8 +242,23 @@ export async function GET(request: Request) {
             specs: bundleSpecs,
             type: "pool",
             pricingSource: priceData ? "aws-api" : "estimated",
-            pricingUnit: priceData ? priceData.unit : "hour",
-            selectors: selectors
+            pricingUnit: priceData?.unit || "hour",
+            selectors: selectors,
+            // Add license-specific pricing
+            licensePricing: {
+              included: {
+                hourlyRate: hourlyRate,
+                monthlyRate: formattedMonthlyPrice,
+                displayPrice: formatPriceForDisplay(formattedMonthlyPrice),
+                displayHourlyPrice: formatHourlyPriceForDisplay(hourlyRate)
+              },
+              byol: {
+                hourlyRate: byolHourlyRate,
+                monthlyRate: formattedByolMonthlyPrice,
+                displayPrice: formatPriceForDisplay(formattedByolMonthlyPrice),
+                displayHourlyPrice: formatHourlyPriceForDisplay(byolHourlyRate)
+              }
+            }
           };
         });
         
@@ -262,7 +312,7 @@ export async function GET(request: Request) {
 }
 
 // Helper function to estimate pool bundle pricing (fallback only)
-function getPoolBundlePrice(specs: any): number {
+function getPoolBundlePrice(specs: any, license: string = "included"): number {
   // Pool pricing is typically higher than Core pricing
   // This is a simplified model based on specs
   let basePrice = 0;
@@ -287,6 +337,11 @@ function getPoolBundlePrice(specs: any): number {
     } else {
       basePrice = 255.50; // PowerPro (0.35/hr * 730)
     }
+  }
+  
+  // Apply license discount for BYOL
+  if (license === "bring-your-own-license") {
+    basePrice *= 0.85; // Apply 15% discount for BYOL
   }
   
   return basePrice;

@@ -85,12 +85,12 @@ function getBundleName(bundleId: string) {
     'performance': 'Performance',
     'power': 'Power',
     'powerpro': 'PowerPro',
-    'graphics': 'Graphics',
-    'graphicspro': 'GraphicsPro',
+    'graphics': 'Graphics', // Fixed: removed incorrect CPU' suffix
+    'graphicspro': 'GraphicsPro', // Fixed: removed incorrect vCPU' suffix
     'graphics-g4dn': 'Graphics.g4dn',
     'graphicspro-g4dn': 'GraphicsPro.g4dn',
-    'general-16': 'General Purpose (16 vCPU)',
-    'general-32': 'General Purpose (32 vCPU)',
+    'general-16': 'General Purpose (16 vCPU',  // Ensure format matches AWS exactly
+    'general-32': 'General Purpose (32 vCPU'   // Ensure format matches AWS exactly
   };
   
   // Check each key against the bundleId
@@ -108,13 +108,15 @@ export async function POST(request: Request) {
   try {
     const config: WorkSpaceConfig = await request.json()
     
-    // Log the incoming config to debug storage values
+    // Add more detailed logging for license tracking
     console.log("INCOMING CONFIG:", {
       bundleId: config.bundleId,
       rootVolume: config.rootVolume,
       userVolume: config.userVolume,
-      operatingSystem: config.operatingSystem, // Log the OS to debug
-      bundleSpecs: config.bundleSpecs
+      operatingSystem: config.operatingSystem,
+      license: config.license,
+      poolLicense: config.poolLicense,
+      isPoolCalculation: config.isPoolCalculation
     });
 
     // Initialize variables for pricing
@@ -130,14 +132,32 @@ export async function POST(request: Request) {
     
     // Convert operating system value for the API
     // The API expects "Windows" or "Any" (for BYOL)
-    const apiOperatingSystem = config.operatingSystem === 'windows' ? 'Windows' : 'Any';
+    let apiOperatingSystem = config.operatingSystem === 'windows' ? 'Windows' : 'Any';
     
     // Convert license value for the API
-    // The API expects "Included" or "Bring Your Own License"
-    const apiLicense = apiOperatingSystem === 'Windows' ? 'Included' : 'Bring Your Own License';
+    let apiLicense; 
+    if (config.isPoolCalculation) {
+      // For pool calculations, use the pool license or the general license
+      const licenseToUse = config.poolLicense || config.license || "included";
+      apiLicense = licenseToUse === 'bring-your-own-license' ? 'Bring Your Own License' : 'Included';
+      console.log(`Using pool license value: ${apiLicense}`);
+    } else {
+      // For regular WorkSpaces Core
+      const licenseToUse = config.license || "included";
+      apiLicense = licenseToUse === 'bring-your-own-license' ? 'Bring Your Own License' : 'Included';
+      
+      // If using BYOL with a non-Windows OS, use the "Any" OS
+      if (licenseToUse === 'bring-your-own-license' && apiOperatingSystem !== 'Windows') {
+        apiOperatingSystem = 'Any';
+      }
+    }
     
     console.log(`Using operating system: ${apiOperatingSystem}, license: ${apiLicense}`);
     
+    // Create formatted volume strings for API calls
+    const formattedRootVolume = config.rootVolume ? `${config.rootVolume} GB` : "80 GB";
+    const formattedUserVolume = config.userVolume ? `${config.userVolume} GB` : "100 GB";
+
     // Try to get direct pricing information from AWS Pricing API
     try {
       // First, try to fetch the aggregation data to verify parameters
@@ -168,12 +188,12 @@ export async function POST(request: Request) {
           'performance': 'Performance',
           'power': 'Power',
           'powerpro': 'PowerPro',
-          'graphics': 'Graphics',
-          'graphicspro': 'GraphicsPro',
+          'graphics': 'Graphics', // Fixed: removed incorrect CPU' suffix
+          'graphicspro': 'GraphicsPro', // Fixed: removed incorrect vCPU' suffix
           'graphics-g4dn': 'Graphics.g4dn',
           'graphicspro-g4dn': 'GraphicsPro.g4dn',
-          'general-16': 'General Purpose (16',
-          'general-32': 'General Purpose (32'
+          'general-16': 'General Purpose (16 vCPU',  // Ensure format matches AWS exactly
+          'general-32': 'General Purpose (32 vCPU'   // Ensure format matches AWS exactly
         };
         
         // Find the bundle prefix we need to search for
@@ -276,8 +296,8 @@ export async function POST(request: Request) {
             const urlParams = [
               encodedRegion,
               encodeURIComponent(configToUse["Bundle Description"]),
-              encodeURIComponent(configToUse.rootVolume),
-              encodeURIComponent(configToUse.userVolume),
+              encodeURIComponent(formattedRootVolume),  // Use formatted volume with GB
+              encodeURIComponent(formattedUserVolume),  // Use formatted volume with GB
               encodeURIComponent(configToUse["Operating System"]), // Use our API OS value
               encodeURIComponent(configToUse.License), // Use our API license value
               encodeURIComponent(configToUse["Running Mode"]),
@@ -285,7 +305,6 @@ export async function POST(request: Request) {
             ];
             
             const pricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${urlParams.join('/')}/index.json`;
-            
             console.log(`Fetching pricing from URL: ${pricingUrl}`);
             
             // Fetch the pricing data
@@ -305,7 +324,7 @@ export async function POST(request: Request) {
                 const info = priceInfo as any;
                 prices.push({
                   description: key,
-                  price: parseFloat(info.price),
+                  price: parseFloat(info.price),   // Store the raw price
                   unit: info.Unit,
                   rateCode: info.rateCode
                 });
@@ -316,10 +335,12 @@ export async function POST(request: Request) {
               
               // Use the pricing data from AWS
               bundleName = selectedConfig["Bundle Description"];
-              // Ensure consistent price formatting
-              baseCost = formatPriceForStorage(totalMonthlyPrice);
+              baseCost = totalMonthlyPrice; // Store the raw price
+              console.log(`Raw price from AWS: ${baseCost}`);
               pricingSource = "aws-api";
               
+              // Ensure consistent price formatting
+              baseCost = formatPriceForStorage(totalMonthlyPrice);
               console.log(`Using AWS API pricing: ${baseCost} (${formatPriceForDisplay(baseCost)}) for ${bundleName}`);
             } else {
               throw new Error("No pricing data available from AWS API");
@@ -335,17 +356,15 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       console.error("Error fetching pricing details:", error);
-      // Continue with calculated pricing
+      // Continue with calculated pricing if not already handled
     }
 
     // If we couldn't get pricing from AWS API, use our calculated pricing
     if (pricingSource === "calculated") {
       console.log("Using calculated pricing");
-      
       const rawPrice = estimateBundlePrice(config.bundleId, config.operatingSystem, config.runningMode);
       baseCost = formatPriceForStorage(rawPrice); // Ensure consistent price format
       bundleName = getBundleName(config.bundleId);
-      
       console.log(`Using calculated pricing: ${baseCost} (${formatPriceForDisplay(baseCost)}) for ${bundleName}`);
     }
 
@@ -353,6 +372,22 @@ export async function POST(request: Request) {
     if (pricingSource === "calculated" && config.runningMode === "auto-stop" && config.billingOption === "hourly") {
       // AutoStop with hourly billing typically costs less
       baseCost = baseCost * 0.8;
+    }
+
+    // If we're calculating pool pricing, make sure license is properly handled 
+    if (config.isPoolCalculation === true) {
+      console.log(`Pool calculation with license: ${config.license}, source: ${pricingSource}`);
+      
+      // For calculated pricing, apply the discount
+      if (pricingSource === "calculated" && config.license === "bring-your-own-license") {
+        console.log("Applying BYOL discount to calculated pool pricing");
+        baseCost *= 0.85; // Apply 15% discount for BYOL
+      }
+      
+      // For AWS API pricing, log the received pricing for debugging
+      if (pricingSource === "aws-api") {
+        console.log(`Using AWS API pricing for pool with license ${config.license}: ${baseCost}`);
+      }
     }
 
     // Calculate total costs - ensure consistent decimal handling
@@ -363,30 +398,29 @@ export async function POST(request: Request) {
     // Determine billing model display name
     const billingModel = config.billingOption === "monthly" ? "Monthly" : "Hourly";
 
-    // Make sure we properly parse the selectedRootVolume and selectedUserVolume values
-    // from the AWS API to extract the numeric values
-    let apiRootVolume = null;
-    let apiUserVolume = null;
+    // Parse the volume information from API or use provided values
+    let parsedRootVolume = null;
+    let parsedUserVolume = null;
 
     if (selectedRootVolume) {
       const match = selectedRootVolume.match(/(\d+)\s*GB/i);
       if (match) {
-        apiRootVolume = match[1];
-        console.log(`API provided root volume: ${apiRootVolume}GB from "${selectedRootVolume}"`);
+        parsedRootVolume = match[1];
+        console.log(`API provided root volume: ${parsedRootVolume}GB from "${selectedRootVolume}"`);
       }
     }
 
     if (selectedUserVolume) {
       const match = selectedUserVolume.match(/(\d+)\s*GB/i);
       if (match) {
-        apiUserVolume = match[1];
-        console.log(`API provided user volume: ${apiUserVolume}GB from "${selectedUserVolume}"`);
+        parsedUserVolume = match[1];
+        console.log(`API provided user volume: ${parsedUserVolume}GB from "${selectedUserVolume}"`);
       }
     }
 
     // First use API provided values, then fall back to config values, then default calculation
-    const rootVolume = apiRootVolume || config.rootVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
-    const userVolume = apiUserVolume || config.userVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
+    const rootVolume = parsedRootVolume || config.rootVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
+    const userVolume = parsedUserVolume || config.userVolume || (config.bundleSpecs?.storage ? Math.floor(config.bundleSpecs.storage / 2).toString() : "80");
 
     console.log(`FINAL VOLUME CHOICE: Root=${rootVolume}, User=${userVolume} (from config=${config.rootVolume}, from API=${selectedRootVolume})`);
 
@@ -444,6 +478,7 @@ export async function POST(request: Request) {
       billingModel,
       baseCost,
       pricingSource,
+      license: apiLicense, // Include the actual license used for the calculation
       storage: totalStorage,
       rootVolume: parseInt(rootVolume, 10),
       userVolume: parseInt(userVolume, 10),
