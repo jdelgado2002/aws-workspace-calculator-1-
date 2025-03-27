@@ -376,87 +376,83 @@ export default function ConfigurationPanel({
 
             <div className="grid grid-cols-4 gap-4 py-4">
               <div className="flex flex-col items-center">
-                <div className="bg-blue-50 p-3 rounded-full mb-2">
-                  <Cpu className="h-5 w-5 text-blue-600" />
-                </div>
-                <div className="text-xs text-gray-500">vCPU</div>
-                <div className="font-medium">{config.bundleSpecs.vCPU} vCPU</div>
+              <div className="bg-blue-50 p-3 rounded-full mb-2">
+                <Cpu className="h-5 w-5 text-blue-600" />
+              </div>
+              <div className="text-xs text-gray-500">vCPU</div>
+              <div className="font-medium">{config.bundleSpecs.vCPU} vCPU</div>
               </div>
 
               <div className="flex flex-col items-center">
-                <div className="bg-blue-50 p-3 rounded-full mb-2">
-                  <MemoryStick className="h-5 w-5 text-blue-600" />
-                </div>
-                <div className="text-xs text-gray-500">Memory</div>
-                <div className="font-medium">{config.bundleSpecs.memory} GB</div>
+              <div className="bg-blue-50 p-3 rounded-full mb-2">
+                <MemoryStick className="h-5 w-5 text-blue-600" />
               </div>
-
-              {/* Replace the single storage display with two separate volume selectors */}
-              <div className="flex flex-col items-center">
-                <div className="bg-blue-50 p-3 rounded-full mb-2">
-                  <HardDrive className="h-5 w-5 text-blue-600" />
-                </div>
-                <div className="text-xs text-gray-500">Root Volume</div>
-                <Select
-                  value={config.rootVolume?.toString() || ""}
-                  onValueChange={(value) => onConfigChange({ rootVolume: value })}
-                  disabled={isLoading}
-                >
-                  <SelectTrigger className="h-7 px-2 w-20 text-center font-medium bg-transparent border-none focus:ring-0 focus:ring-offset-0">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {rootVolumeOptions.map((volume) => (
-                      <SelectItem key={volume.value} value={volume.value}>
-                        {volume.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="text-xs text-gray-500">Memory</div>
+              <div className="font-medium">{config.bundleSpecs.memory} GB</div>
               </div>
 
               <div className="flex flex-col items-center">
-                <div className="bg-blue-50 p-3 rounded-full mb-2">
-                  <Database className="h-5 w-5 text-blue-600" />
-                </div>
-                <div className="text-xs text-gray-500">User Volume</div>
-                <Select
-                  value={config.userVolume?.toString() || ""}
-                  onValueChange={(value) => onConfigChange({ userVolume: value })}
-                  disabled={isLoading}
-                >
-                  <SelectTrigger className="h-7 px-2 w-20 text-center font-medium bg-transparent border-none focus:ring-0 focus:ring-offset-0">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {userVolumeOptions.map((volume) => (
-                      <SelectItem key={volume.value} value={volume.value}>
-                        {volume.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="bg-blue-50 p-3 rounded-full mb-2">
+                <MonitorSmartphone className="h-5 w-5 text-blue-600" />
               </div>
-
-              <div className="flex flex-col items-center col-span-4 border-t pt-4 mt-4">
-                <div className="flex gap-2 items-center">
-                  <HardDrive className="h-5 w-5 text-blue-600" />
-                  <span className="text-sm font-medium">
-                    Total Storage: {parseInt(config.rootVolume || "0") + parseInt(config.userVolume || "0")} GB
-                  </span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  ({config.rootVolume || "0"} GB Root + {config.userVolume || "0"} GB User)
-                </div>
+              <div className="text-xs text-gray-500">Graphics</div>
+              <div className="font-medium">{config.bundleSpecs.graphics}</div>
               </div>
 
               <div className="flex flex-col items-center">
-                <div className="bg-blue-50 p-3 rounded-full mb-2">
-                  <MonitorSmartphone className="h-5 w-5 text-blue-600" />
-                </div>
-                <div className="text-xs text-gray-500">Graphics</div>
-                <div className="font-medium">{config.bundleSpecs.graphics}</div>
+              <div className="bg-blue-50 p-3 rounded-full mb-2">
+                <HardDrive className="h-5 w-5 text-blue-600" />
               </div>
+              <div className="text-xs text-gray-500">Total Storage</div>
+              <div className="font-medium">{parseInt(config.rootVolume || "0") + parseInt(config.userVolume || "0")} GB</div>
+              </div>
+            </div>
+
+            {/* Volume selectors in a second row */}
+            <div className="grid grid-cols-2 gap-6">
+              <div>
+              <Label htmlFor="rootVolume" className="mb-2 block">Root Volume</Label>
+              <Select
+                value={config.rootVolume?.toString() || ""}
+                onValueChange={(value) => onConfigChange({ rootVolume: value })}
+                disabled={isLoading}
+              >
+                <SelectTrigger id="rootVolume" className="w-full">
+                <SelectValue placeholder="Select size" />
+                </SelectTrigger>
+                <SelectContent>
+                {rootVolumeOptions.map((volume) => (
+                  <SelectItem key={volume.value} value={volume.value}>
+                  {volume.label}
+                  </SelectItem>
+                ))}
+                </SelectContent>
+              </Select>
+              </div>
+
+              <div>
+              <Label htmlFor="userVolume" className="mb-2 block">User Volume</Label>
+              <Select
+                value={config.userVolume?.toString() || ""}
+                onValueChange={(value) => onConfigChange({ userVolume: value })}
+                disabled={isLoading}
+              >
+                <SelectTrigger id="userVolume" className="w-full">
+                <SelectValue placeholder="Select size" />
+                </SelectTrigger>
+                <SelectContent>
+                {userVolumeOptions.map((volume) => (
+                  <SelectItem key={volume.value} value={volume.value}>
+                  {volume.label}
+                  </SelectItem>
+                ))}
+                </SelectContent>
+              </Select>
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-500 -mt-2">
+              Storage breakdown: {config.rootVolume || "0"} GB Root + {config.userVolume || "0"} GB User
             </div>
 
             <div>
