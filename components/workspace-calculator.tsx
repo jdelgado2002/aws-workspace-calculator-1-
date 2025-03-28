@@ -9,37 +9,107 @@ import { useDebounce } from "@/hooks/use-debounce"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
 
-// Make sure bundle specs are updated correctly when a new bundle is selected
+// Default configuration to use when initializing
+const defaultConfig: WorkSpaceConfig = {
+  region: "us-west-2",
+  bundleId: "standard",
+  bundleSpecs: {
+    vCPU: 2,
+    memory: 4,
+    storage: 80,
+    graphics: "Standard"
+  },
+  rootVolume: "80",
+  userVolume: "10", 
+  operatingSystem: "windows",
+  license: "included", // Add default license
+  runningMode: "always-on",
+  numberOfWorkspaces: 1,
+  billingOption: "monthly",
+  // Default pool settings
+  poolRegion: "US West (Oregon)",
+  poolBundleId: undefined,
+  poolBundleSpecs: undefined,
+  poolOperatingSystem: "windows",
+  poolLicense: "included",
+  poolNumberOfUsers: 10,
+  poolUsagePattern: {
+    weekdayDaysCount: 5,
+    weekdayPeakHoursPerDay: 8,
+    weekdayOffPeakConcurrentUsers: 10,
+    weekdayPeakConcurrentUsers: 80,
+    weekendDaysCount: 2,
+    weekendPeakHoursPerDay: 4,
+    weekendOffPeakConcurrentUsers: 5,
+    weekendPeakConcurrentUsers: 40
+  }
+};
+
 export default function WorkSpaceCalculator() {
-  const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [calculating, setCalculating] = useState(false)
-
-  const [config, setConfig] = useState<WorkSpaceConfig>({
-    region: "",
-    bundleId: "",
-    bundleSpecs: {
-      vCPU: 0,
-      memory: 0,
-      storage: 0,
-      graphics: "",
-    },
-    // Add storage volume properties
-    rootVolume: "",
-    userVolume: "",
-    operatingSystem: "",
-    runningMode: "",
-    numberOfWorkspaces: 1,
-    billingOption: "",
-  })
-
-  // Add a ref to track when we're updating from API response to avoid loops
-  const updatingFromApiResponse = useRef(false);
-
+  const [configOptions, setConfigOptions] = useState<ConfigOptions | undefined>(undefined)
+  
+  // We'll use an activeTab state to know which pricing calculation to use
+  const [activeTab, setActiveTab] = useState<string>("core");
+  
+  const [config, setConfig] = useState<WorkSpaceConfig>(defaultConfig)
   const [pricingEstimate, setPricingEstimate] = useState<PricingEstimate | null>(null)
 
   const debouncedConfig = useDebounce(config, 500)
+
+  // Define onConfigChange first before referencing it
+  const onConfigChange = useCallback((newConfig: Partial<WorkSpaceConfig>) => {
+    // Update config based on the changes
+    setConfig(prevConfig => {
+      // Handle license changes to ensure they trigger recalculation
+      if (newConfig.poolLicense !== undefined || newConfig.license !== undefined) {
+        console.log("License updated, triggering price recalculation");
+        // Force a recalculation by setting a timestamp
+        // This ensures the debounced effect will run
+        const configWithTimestamp = { 
+          ...prevConfig, 
+          ...newConfig,
+          _lastUpdated: Date.now() 
+        };
+        return configWithTimestamp;
+      }
+      
+      // Special case for bundle changes
+      if (newConfig.bundleId && newConfig.bundleId !== prevConfig.bundleId) {
+        // Find the selected bundle
+        const selectedBundle = configOptions?.bundles?.find(bundle => bundle.id === newConfig.bundleId);
+        
+        if (selectedBundle) {
+          // Include bundle specs automatically
+          let updatedConfig = { 
+            ...prevConfig, 
+            ...newConfig,
+            bundleSpecs: selectedBundle.specs 
+          };
+          
+          // Update volumes if the bundle has pricing configuration with volumes
+          if (selectedBundle.pricingConfig?.rootVolume) {
+            updatedConfig.rootVolume = selectedBundle.pricingConfig.rootVolume.replace(/\s*GB$/i, '');
+          }
+          
+          if (selectedBundle.pricingConfig?.userVolume) {
+            updatedConfig.userVolume = selectedBundle.pricingConfig.userVolume.replace(/\s*GB$/i, '');
+          }
+          
+          return updatedConfig;
+        }
+      }
+      
+      // For non-bundle changes, simply merge the configs
+      return { ...prevConfig, ...newConfig };
+    });
+  }, [configOptions?.bundles]);
+
+  // Track tab changes
+  const handleTabChange = useCallback((tab: string) => {
+    setActiveTab(tab);
+  }, []);
 
   // Fetch configuration options on component mount
   useEffect(() => {
@@ -122,148 +192,74 @@ export default function WorkSpaceCalculator() {
   // Calculate pricing when configuration changes
   useEffect(() => {
     const updatePricing = async () => {
-      // Don't make API calls if we're already updating from an API response
-      if (!debouncedConfig.region || !debouncedConfig.bundleId || updatingFromApiResponse.current) return
-
+      if (!debouncedConfig.bundleId) return
+      
       try {
-        setCalculating(true)
-        // Log the config being sent to the pricing API
-        console.log("Sending config to pricing API:", {
-          bundleId: debouncedConfig.bundleId,
-          rootVolume: debouncedConfig.rootVolume,
-          userVolume: debouncedConfig.userVolume,
-          storage: debouncedConfig.bundleSpecs?.storage
+        // Determine which config to use based on active tab
+        const configToUse = activeTab === "pool" 
+          ? { 
+              ...debouncedConfig,
+              // For pool pricing, we need to use pool-specific properties
+              region: debouncedConfig.poolRegion || debouncedConfig.region,
+              bundleId: debouncedConfig.poolBundleId || debouncedConfig.bundleId,
+              bundleSpecs: debouncedConfig.poolBundleSpecs || debouncedConfig.bundleSpecs,
+              operatingSystem: debouncedConfig.poolOperatingSystem || debouncedConfig.operatingSystem,
+              // Important: Use the pool license configuration
+              license: debouncedConfig.poolLicense || "included", 
+              numberOfWorkspaces: debouncedConfig.poolNumberOfUsers || debouncedConfig.numberOfWorkspaces,
+              // Set a special flag to indicate this is a pool calculation
+              isPoolCalculation: true
+            } 
+          : debouncedConfig;
+        
+        console.log("Sending configuration to pricing API:", {
+          bundleId: configToUse.bundleId,
+          license: configToUse.license,
+          isPool: activeTab === "pool"
         });
         
-        const pricing = await calculatePricing(debouncedConfig)
-        
-        // If the API returned volume information, update our local state
-        if (pricing.storage && pricing.rootVolume && pricing.userVolume) {
-          console.log(`API returned storage info: root=${pricing.rootVolume}GB, user=${pricing.userVolume}GB, total=${pricing.storage}GB`);
-          
-          // Only update if values actually changed from what we already have
-          const rootVolumeChanged = pricing.rootVolume.toString() !== debouncedConfig.rootVolume;
-          const userVolumeChanged = pricing.userVolume.toString() !== debouncedConfig.userVolume;
-          const storageChanged = pricing.storage !== debouncedConfig.bundleSpecs?.storage;
-          
-          if (rootVolumeChanged || userVolumeChanged || storageChanged) {
-            // Set the flag to prevent loops
-            updatingFromApiResponse.current = true;
-            
-            // Update config with API-provided values
-            setConfig(prev => ({
-              ...prev,
-              rootVolume: pricing.rootVolume.toString(),
-              userVolume: pricing.userVolume.toString(),
-              bundleSpecs: {
-                ...prev.bundleSpecs,
-                storage: pricing.storage
-              }
-            }));
-            
-            // Reset the flag after a small delay to allow state to update
-            setTimeout(() => {
-              updatingFromApiResponse.current = false;
-            }, 100);
-          }
-        }
-        
-        setPricingEstimate(pricing)
-        setError(null)
-      } catch (err) {
-        console.error("Failed to calculate pricing:", err)
-        setError("Failed to calculate pricing. Please check your configuration and try again.")
-      } finally {
-        setCalculating(false)
+        const estimate = await calculatePricing(configToUse)
+        setPricingEstimate(estimate)
+      } catch (error) {
+        console.error("Error calculating pricing:", error)
+        setError("Failed to calculate pricing. Please try again.")
       }
     }
 
     updatePricing()
-  }, [debouncedConfig])
+  }, [debouncedConfig, activeTab])
 
-  // Update the handleConfigChange function
+  // Handle configuration changes
   const handleConfigChange = useCallback((newConfig: Partial<WorkSpaceConfig>) => {
-    console.log("Updating workspace config with:", newConfig);
-    
-    setConfig((prev) => {
-      const updated = { ...prev, ...newConfig };
-
-      // If bundle changed, update bundle specs and storage volumes
-      if (newConfig.bundleId && configOptions) {
-        const selectedBundle = configOptions.bundles.find((b) => b.id === newConfig.bundleId);
-        if (selectedBundle) {
-          console.log("Selected bundle specs:", selectedBundle.specs);
-          updated.bundleSpecs = selectedBundle.specs;
-          
-          // Set storage volumes based on the bundle specs
-          const storage = selectedBundle.specs.storage || 80;
-          
-          // Only update volumes if they haven't been explicitly set by the user
-          if (newConfig.rootVolume) {
-            // User explicitly provided a root volume
-            updated.rootVolume = newConfig.rootVolume;
-          } else if (!updated.rootVolume || updated.rootVolume === prev.rootVolume) {
-            // Bundle changed, use half the total storage
-            updated.rootVolume = Math.floor(storage / 2).toString();
-          }
-          
-          if (newConfig.userVolume) {
-            // User explicitly provided a user volume
-            updated.userVolume = newConfig.userVolume;
-          } else if (!updated.userVolume || updated.userVolume === prev.userVolume) {
-            // Bundle changed, use half the total storage
-            updated.userVolume = Math.floor(storage / 2).toString();
-          }
-          
-          console.log(`STORAGE UI UPDATE: Bundle ${selectedBundle.id} has storage=${storage}GB, setting Root=${updated.rootVolume}GB, User=${updated.userVolume}GB`);
-        }
-      }
-
-      return updated;
-    });
-  }, [configOptions]);
-
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
-    )
-  }
-
-  if (!configOptions) {
-    return (
-      <div className="space-y-4">
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            Failed to load configuration options. Please refresh the page and try again.
-          </AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
+    setConfig(prevConfig => ({ ...prevConfig, ...newConfig }))
+  }, [])
 
   return (
-    <div className="space-y-4">
+    <div className="container mx-auto py-8 px-4">
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mb-6">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      <div className="flex flex-col lg:flex-row gap-6">
-        <div className="w-full lg:w-3/5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
           <ConfigurationPanel
             config={config}
             configOptions={configOptions}
-            onConfigChange={handleConfigChange}
-            isLoading={calculating}
+            onConfigChange={onConfigChange}
+            isLoading={loading}
+            onTabChange={handleTabChange}
           />
         </div>
-        <div className="w-full lg:w-2/5">
-          <CostSummaryPanel config={config} pricingEstimate={pricingEstimate} isLoading={calculating} />
+        <div>
+          <CostSummaryPanel
+            config={config}
+            pricingEstimate={pricingEstimate}
+            isLoading={loading}
+            activeTab={activeTab} // Pass the active tab to the summary panel
+          />
         </div>
       </div>
     </div>

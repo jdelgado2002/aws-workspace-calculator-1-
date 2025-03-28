@@ -1,26 +1,32 @@
-"use server";
+'use server'
 
-/**
- * This server action fetches updated bundle information when the region changes
- * and ensures that the displayed bundle prices are accurate for the selected region.
- */
-export async function getBundlesForRegion(region: string) {
+import { ConfigOptions } from '@/types/workspace'
+
+export async function getBundlesForRegion(region: string): Promise<Partial<ConfigOptions>> {
   try {
     // Make sure region is provided
     if (!region) {
       throw new Error("Region is required");
     }
 
-    // Determine the base URL for API calls
+    console.log(`[Core] Fetching bundles for region: ${region}`);
+    
+    // Determine the base URL for API calls - must be an absolute URL
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
-      : process.env.NEXT_PUBLIC_API_URL || '';
+      : process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
     
     // Generate a cache-busting timestamp to ensure fresh data
     const timestamp = Date.now();
     
-    // Call our bundles API with the selected region and timestamp
-    const response = await fetch(`${baseUrl}/api/config/bundles?region=${encodeURIComponent(region)}&t=${timestamp}`, {
+    // Construct the full URL with proper encoding
+    const apiUrl = new URL(`/api/config/bundles`, baseUrl);
+    apiUrl.searchParams.append('region', region);
+    apiUrl.searchParams.append('t', timestamp.toString());
+    
+    console.log(`[Core] Fetching from URL: ${apiUrl.toString()}`);
+    
+    const response = await fetch(apiUrl.toString(), {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -30,32 +36,22 @@ export async function getBundlesForRegion(region: string) {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch bundles: ${response.statusText}`);
+      throw new Error(`Failed to fetch bundles: ${response.status} ${response.statusText}`);
     }
 
     const data = await response.json();
     
-    // Log detailed pricing information for debugging
-    console.log(`[Region Change] Fetched ${data.bundles?.length || 0} bundles for region ${region}`);
-    if (data.bundles?.length > 0) {
-      console.log(`[Region Change] First bundle price: ${data.bundles[0].price} (${data.bundles[0].displayPrice})`);
-    }
-    
     // Return the bundles and related options
     return {
       bundles: data.bundles || [],
-      storage: data.storage || { rootVolume: [], userVolume: [] },
       operatingSystems: data.operatingSystems || [],
       licenseOptions: data.licenseOptions || [],
+      storage: data.storage || { rootVolume: [], userVolume: [] },
     };
   } catch (error) {
-    console.error("[Region Change] Error updating bundles for region:", error);
-    // Return empty arrays as fallback
+    console.error("[Core] Error fetching bundles:", error);
     return {
       bundles: [],
-      storage: { rootVolume: [], userVolume: [] },
-      operatingSystems: [],
-      licenseOptions: [],
       error: error instanceof Error ? error.message : "Failed to fetch bundles"
     };
   }
