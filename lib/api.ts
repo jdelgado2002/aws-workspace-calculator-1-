@@ -172,3 +172,51 @@ export async function calculatePricing(config: WorkSpaceConfig): Promise<Pricing
   }
 }
 
+// AppStream endpoints
+export async function fetchAppStreamConfig(region: string) {
+  try {
+    const response = await fetch(`/api/config/appstream?region=${region}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch AppStream configuration');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching AppStream configuration:', error);
+    throw error;
+  }
+}
+
+export async function fetchAppStreamBundles(region: string, instanceFamily: string, instanceFunction: string) {
+  try {
+    const response = await fetch(`/api/config/appstream/bundles?region=${region}&instanceFamily=${instanceFamily}&instanceFunction=${instanceFunction}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch AppStream bundles');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching AppStream bundles:', error);
+    throw error;
+  }
+}
+
+export async function calculateAppStreamPricing(params: any) {
+  try {
+    const response = await fetch('/api/pricing/appstream/estimate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to calculate AppStream pricing');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error calculating AppStream pricing:', error);
+    throw error;
+  }
+}
+
