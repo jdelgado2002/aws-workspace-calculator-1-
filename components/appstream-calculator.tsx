@@ -9,6 +9,30 @@ import { Slider } from '@/components/ui/slider';
 import { calculateAppStreamPricing, fetchAppStreamBundles, fetchAppStreamConfig } from '@/lib/api';
 import { regions } from '@/lib/regions';
 import { Button } from '@/components/ui/button';
+import { AppStreamUsagePattern } from '@/components/appstream-usage-pattern';
+import CostSummaryPanel from './cost-summary-panel';
+
+interface AppStreamUsagePattern {
+  weekdayDaysCount: number;
+  weekdayPeakHoursPerDay: number;
+  weekdayOffPeakConcurrentUsers: number;
+  weekdayPeakConcurrentUsers: number;
+  weekendDaysCount: number;
+  weekendPeakHoursPerDay: number;
+  weekendOffPeakConcurrentUsers: number;
+  weekendPeakConcurrentUsers: number;
+}
+
+const DEFAULT_USAGE_PATTERN: AppStreamUsagePattern = {
+  weekdayDaysCount: 5,
+  weekdayPeakHoursPerDay: 8,
+  weekdayOffPeakConcurrentUsers: 10,
+  weekdayPeakConcurrentUsers: 80,
+  weekendDaysCount: 2,
+  weekendPeakHoursPerDay: 4,
+  weekendOffPeakConcurrentUsers: 5,
+  weekendPeakConcurrentUsers: 40
+};
 
 export default function AppStreamCalculator() {
   // State for configuration options
@@ -29,10 +53,31 @@ export default function AppStreamCalculator() {
   const [usageHours, setUsageHours] = useState<number>(730);
   const [usersPerInstance, setUsersPerInstance] = useState<number>(1);
   const [numberOfInstances, setNumberOfInstances] = useState<number>(1);
+  const [usagePattern, setUsagePattern] = useState<AppStreamUsagePattern>(DEFAULT_USAGE_PATTERN);
+  const [userCount, setUserCount] = useState<number>(10);
 
   // State for pricing results
-  const [pricing, setPricing] = useState<any>(null);
+  const [pricingEstimate, setPricingEstimate] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  
+  // Create a WorkSpaceConfig-like object for CostSummaryPanel
+  const appstreamConfig = {
+    region: selectedRegion,
+    bundleId: selectedBundle,
+    bundleSpecs: bundles.find(b => b.id === selectedBundle)?.specs || {
+      vCPU: 0,
+      memory: 0,
+      storage: 0,
+      graphics: 'Standard'
+    },
+    numberOfWorkspaces: userCount,
+    operatingSystem: selectedOS,
+    // Add Pool specifics for the CostSummaryPanel
+    poolUsagePattern: usagePattern,
+    poolNumberOfUsers: userCount,
+    poolLicense: selectedOS === 'windows' ? 'included' : 'not-applicable',
+    isAppStream: true // Flag to identify this as AppStream config
+  };
   
   // Fetch initial configuration when region changes
   useEffect(() => {
@@ -51,7 +96,7 @@ export default function AppStreamCalculator() {
         setSelectedBundle('');
         setSelectedOS('');
         setBundles([]);
-        setPricing(null);
+        setPricingEstimate(null);
       } catch (error) {
         console.error('Failed to load AppStream configuration:', error);
       }
@@ -101,20 +146,63 @@ export default function AppStreamCalculator() {
         instanceFunction: selectedInstanceFunction,
         operatingSystem: selectedOS,
         multiSession: selectedMultiSession,
+        usagePattern: 'custom',
         usageHours: usageHours,
         usersPerInstance: usersPerInstance,
-        numberOfInstances: numberOfInstances
+        numberOfInstances: numberOfInstances,
+        userCount: userCount,
+        weekdayDaysCount: usagePattern.weekdayDaysCount,
+        weekdayPeakHoursPerDay: usagePattern.weekdayPeakHoursPerDay,
+        weekdayPeakConcurrentUsers: usagePattern.weekdayPeakConcurrentUsers,
+        weekdayOffPeakConcurrentUsers: usagePattern.weekdayOffPeakConcurrentUsers,
+        weekendDaysCount: usagePattern.weekendDaysCount,
+        weekendPeakHoursPerDay: usagePattern.weekendPeakHoursPerDay, 
+        weekendPeakConcurrentUsers: usagePattern.weekendPeakConcurrentUsers,
+        weekendOffPeakConcurrentUsers: usagePattern.weekendOffPeakConcurrentUsers
       };
       
       const result = await calculateAppStreamPricing(params);
-      setPricing(result);
+      
+      // Format the response to match PricingEstimate structure for CostSummaryPanel
+      const formattedEstimate = {
+        costPerWorkspace: result.costPerUser || 0,
+        totalMonthlyCost: result.totalMonthlyCost || 0,
+        annualEstimate: result.annualCost || 0,
+        bundleName: bundle?.name || 'AppStream Bundle',
+        billingModel: 'Hourly',
+        baseCost: result.hourlyPrice * 730, // convert hourly to monthly base
+        pricingSource: 'aws-api',
+        license: selectedOS === 'windows' ? 'included' : 'not-applicable',
+        // Add pool pricing details
+        poolPricingDetails: {
+          userLicenseCost: result.userLicenseCost || 0,
+          activeStreamingCost: result.instanceCost || 0,
+          stoppedInstanceCost: 0,
+          totalInstanceHours: result.totalInstanceHours || 0,
+          utilizedInstanceHours: result.utilizedInstanceHours || 0,
+          bufferInstanceHours: result.bufferInstanceHours || 0,
+        },
+        // Include original details for debugging
+        originalDetails: result.details
+      };
+      
+      setPricingEstimate(formattedEstimate);
     } catch (error) {
       console.error('Failed to calculate pricing:', error);
     } finally {
       setLoading(false);
     }
   };
-  
+
+  // Add useEffect to calculate pricing when key values change
+  useEffect(() => {
+    if (selectedRegion && selectedInstanceFamily && selectedInstanceFunction && 
+        selectedBundle && selectedOS) {
+      handleCalculatePrice();
+    }
+  }, [selectedRegion, selectedInstanceFamily, selectedInstanceFunction, selectedBundle, 
+      selectedOS, selectedMultiSession, usagePattern, userCount, usersPerInstance]);
+
   // Reset form
   const handleReset = () => {
     setSelectedInstanceFamily('');
@@ -126,15 +214,22 @@ export default function AppStreamCalculator() {
     setUsersPerInstance(1);
     setNumberOfInstances(1);
     setBundles([]);
-    setPricing(null);
+    setPricingEstimate(null);
   };
   
   return (
-    <div className="space-y-8">
-      <div className="grid md:grid-cols-2 gap-6">
+    <div className="grid md:grid-cols-2 gap-6">
+      <div className="space-y-6">
         <Card>
           <CardContent className="pt-6">
-            <div className="space-y-4">
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Service Settings</h2>
+              <p className="text-sm text-gray-500">Configure your AppStream 2.0 fleet</p>
+            </div>
+
+            {/* Basic service settings section */}
+            <div className="space-y-6">
+              {/* Existing region selector */}
               <div className="space-y-2">
                 <Label htmlFor="region">Region</Label>
                 <Select 
@@ -153,7 +248,8 @@ export default function AppStreamCalculator() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
+              {/* Add Instance Family selector before Instance Function */}
               <div className="space-y-2">
                 <Label htmlFor="instanceFamily">Instance Family</Label>
                 <Select 
@@ -172,7 +268,8 @@ export default function AppStreamCalculator() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
+              {/* Fleet type (instance function) */}
               <div className="space-y-2">
                 <Label htmlFor="instanceFunction">Instance Function</Label>
                 <Select 
@@ -192,7 +289,8 @@ export default function AppStreamCalculator() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
+              {/* Instance type */}
               <div className="space-y-2">
                 <Label htmlFor="bundleType">Bundle Type</Label>
                 <Select 
@@ -213,27 +311,8 @@ export default function AppStreamCalculator() {
                   </SelectContent>
                 </Select>
               </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="operatingSystem">Operating System</Label>
-                <Select 
-                  value={selectedOS} 
-                  onValueChange={setSelectedOS}
-                  disabled={!selectedBundle}
-                >
-                  <SelectTrigger id="operatingSystem">
-                    <SelectValue placeholder="Select an operating system" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {operatingSystems.map((os) => (
-                      <SelectItem key={os.id} value={os.id}>
-                        {os.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              
+
+              {/* Multi-session toggle */}
               <div className="space-y-2">
                 <Label htmlFor="multiSession">Multi-Session</Label>
                 <Select 
@@ -253,7 +332,29 @@ export default function AppStreamCalculator() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
+              {/* Operating system */}
+              <div className="space-y-2">
+                <Label htmlFor="operatingSystem">Operating System</Label>
+                <Select 
+                  value={selectedOS} 
+                  onValueChange={setSelectedOS}
+                  disabled={!selectedBundle}
+                >
+                  <SelectTrigger id="operatingSystem">
+                    <SelectValue placeholder="Select an operating system" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {operatingSystems.map((os) => (
+                      <SelectItem key={os.id} value={os.id}>
+                        {os.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Users per session */}
               {selectedMultiSession === 'true' && (
                 <div className="space-y-2">
                   <Label htmlFor="usersPerInstance">Users Per Instance</Label>
@@ -278,115 +379,55 @@ export default function AppStreamCalculator() {
                   </div>
                 </div>
               )}
-              
-              <div className="space-y-2">
-                <Label htmlFor="numberOfInstances">Number of Instances</Label>
+
+              {/* Users per month */}
+              <div>
+                <Label htmlFor="userCount">Users per Month</Label>
                 <div className="flex items-center space-x-2">
                   <Input
-                    id="numberOfInstances"
                     type="number"
-                    value={numberOfInstances}
-                    onChange={(e) => setNumberOfInstances(parseInt(e.target.value) || 1)}
+                    id="userCount"
+                    value={userCount}
+                    onChange={(e) => setUserCount(parseInt(e.target.value) || 1)}
                     min={1}
                     max={1000}
                     className="w-20"
                   />
                   <Slider
-                    value={[numberOfInstances]}
-                    onValueChange={(value) => setNumberOfInstances(value[0])}
+                    value={[userCount]}
+                    onValueChange={(value) => setUserCount(value[0])}
                     min={1}
-                    max={50}
-                    step={1}
+                    max={100}
                     className="flex-1"
                   />
                 </div>
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="usageHours">Monthly Usage Hours</Label>
-                <div className="flex items-center space-x-2">
-                  <Input
-                    id="usageHours"
-                    type="number"
-                    value={usageHours}
-                    onChange={(e) => setUsageHours(parseInt(e.target.value) || 0)}
-                    min={0}
-                    max={730}
-                    className="w-20"
-                  />
-                  <Slider
-                    value={[usageHours]}
-                    onValueChange={(value) => setUsageHours(value[0])}
-                    min={0}
-                    max={730}
-                    step={10}
-                    className="flex-1"
-                  />
-                </div>
-                <div className="text-sm text-gray-500 mt-1">
-                  {usageHours === 730 ? 'Running 24/7' : `${usageHours} hours per month`}
-                </div>
-              </div>
-              
-              <div className="flex space-x-2 pt-2">
-                <Button 
-                  onClick={handleCalculatePrice} 
-                  disabled={!selectedRegion || !selectedInstanceFamily || !selectedInstanceFunction || 
-                            !selectedBundle || !selectedOS || loading}
-                >
-                  {loading ? 'Calculating...' : 'Calculate Price'}
-                </Button>
-                <Button variant="outline" onClick={handleReset}>
-                  Reset
-                </Button>
               </div>
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardContent className="pt-6">
-            <h3 className="text-lg font-medium mb-4">Cost Summary</h3>
-            
-            {pricing ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="text-sm">Hourly Price (per instance):</div>
-                  <div className="text-sm font-medium text-right">${pricing.hourlyPrice.toFixed(3)}</div>
-                  
-                  <div className="text-sm">Total Hourly Cost:</div>
-                  <div className="text-sm font-medium text-right">${pricing.hourlyTotal.toFixed(2)}</div>
-                  
-                  <div className="border-t pt-2 text-sm">Monthly Cost ({pricing.estimatedMonthlyHours} hours):</div>
-                  <div className="border-t pt-2 text-lg font-bold text-right">${pricing.monthlyTotal.toFixed(2)}</div>
-                  
-                  <div className="text-sm">Cost per User Session:</div>
-                  <div className="text-sm font-medium text-right">${pricing.costPerUserSession.toFixed(2)}</div>
-                </div>
-                
-                <div className="mt-6">
-                  <h4 className="text-sm font-medium mb-2">Pricing Details</h4>
-                  <div className="text-xs space-y-1 text-gray-600">
-                    <div>Base Instance Price: ${pricing.details.baseInstancePrice.toFixed(3)}/hour</div>
-                    <div>OS Addition: ${pricing.details.osAddition.toFixed(3)}/hour</div>
-                    <div>Region Multiplier: {pricing.details.regionMultiplier.toFixed(2)}x</div>
-                    {pricing.details.multiSessionMultiplier !== 1 && (
-                      <div>Multi-session Discount: {((1 - pricing.details.multiSessionMultiplier) * 100).toFixed(0)}%</div>
-                    )}
-                    {selectedMultiSession === 'true' && (
-                      <div>Effective User Sessions: {pricing.details.effectiveUserSessions} (across {numberOfInstances} instances)</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-500">
-                Select options and click "Calculate Price" to see the estimated cost.
-              </div>
-            )}
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Usage Pattern</h2>
+              <p className="text-sm text-gray-500">Define your usage requirements</p>
+            </div>
+
+            <AppStreamUsagePattern 
+              value={usagePattern} 
+              onChange={(updates) => setUsagePattern({...usagePattern, ...updates})}
+            />
           </CardContent>
         </Card>
       </div>
+
+      {/* Cost Summary Panel - use the existing component */}
+      <CostSummaryPanel 
+        config={appstreamConfig}
+        pricingEstimate={pricingEstimate}
+        isLoading={loading}
+        activeTab="pool" // Set to pool to use pool visualization
+      />
     </div>
   );
 }
