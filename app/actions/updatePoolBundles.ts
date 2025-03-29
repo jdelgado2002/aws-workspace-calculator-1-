@@ -3,69 +3,92 @@
 import { ConfigOptions } from '@/types/workspace'
 import { getRegionCode } from '@/lib/utils'
 
-export async function getPoolBundlesForRegion(region: string): Promise<Partial<ConfigOptions>> {
-  try {
-    // Make sure region is provided
-    if (!region) {
-      throw new Error("Region is required");
-    }
+// Function to extract bundle specs from description
+function extractBundleSpecs(description: string) {
+  const cpuMatch = description.match(/(\d+)\s*vCPU/);
+  const memoryMatch = description.match(/(\d+)GB\s*RAM/);
+  const gpuMatch = description.includes('GPU');
 
-    console.log(`[Pool] Fetching bundles for region: ${region}`);
-    
-    // Convert region name to code if it's a full region name
-    const regionCode = getRegionCode(region);
-    
-    // Determine the base URL for API calls - must be an absolute URL
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-    
-    // Generate a cache-busting timestamp to ensure fresh data
-    const timestamp = Date.now();
-    
-    // Construct the full URL with proper encoding
-    const apiUrl = new URL(`/api/config/pool-bundles`, baseUrl);
-    apiUrl.searchParams.append('region', regionCode);
-    apiUrl.searchParams.append('t', timestamp.toString());
-    
-    console.log(`[Pool] Fetching from URL: ${apiUrl.toString()}`);
-    
-    // Call our pool bundles API with the selected region
+  return {
+    type: description.split('(')[0].trim(),
+    vCPU: cpuMatch ? parseInt(cpuMatch[1]) : 0,
+    memory: memoryMatch ? parseInt(memoryMatch[1]) : 0,
+    graphics: gpuMatch ? "High Performance" : "Standard",
+    gpu: gpuMatch,
+  };
+}
+
+export async function getPoolBundlesForRegion(region: string) {
+  const formattedRegion = encodeURIComponent(region);
+  const apiUrl = new URL(`https://calculator.aws/pricing/2.0/meteredUnitMaps/workspaces/USD/current/workspaces-core-calc/${formattedRegion}/primary-selector-aggregations.json`);
+
+  try {
     const response = await fetch(apiUrl.toString(), {
       method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
-      cache: 'no-store', // Ensure we don't use cached data
-      next: { revalidate: 0 } // Force revalidation every time
+      next: { revalidate: 3600 }
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch pool bundles: ${response.status} ${response.statusText}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const data = await response.json();
     
-    // Log information about the fetched bundles
-    console.log(`[Pool] Fetched ${data.bundles?.length || 0} bundles for region ${region}`);
-    if (data.bundles?.length > 0) {
-      console.log(`[Pool] First bundle: ${data.bundles[0].name}, Price: ${data.bundles[0].price}`);
-    }
-    
-    // Return the bundles and related options
+    // Create sets to store unique values
+    const uniqueBundles = new Map();
+    const operatingSystems = new Set();
+    const licenses = new Set();
+
+    // Process aggregations
+    data.aggregations.forEach((agg: any) => {
+      const selectors = agg.selectors;
+      const bundleDesc = selectors['Bundle Description'];
+      
+      if (!uniqueBundles.has(bundleDesc)) {
+        const specs = extractBundleSpecs(bundleDesc);
+        uniqueBundles.set(bundleDesc, {
+          id: bundleDesc.toLowerCase().replace(/\s+/g, '-'),
+          name: bundleDesc,
+          specs: {
+            ...specs,
+            storage: parseInt(selectors.rootVolume) || 0,
+          },
+          price: 0, // You might want to add actual pricing logic here
+          displayPrice: "Price varies by configuration",
+        });
+      }
+
+      if (selectors['Operating System']) {
+        operatingSystems.add(selectors['Operating System']);
+      }
+      if (selectors['License']) {
+        licenses.add(selectors['License']);
+      }
+    });
+
+    // Transform sets to arrays of objects with value/label pairs
+    const poolOperatingSystems = Array.from(operatingSystems).map(os => ({
+      value: os.toString().toLowerCase().replace(/\s+/g, '-'),
+      label: os.toString()
+    }));
+
+    const poolLicenseOptions = Array.from(licenses).map(license => ({
+      value: license.toString().toLowerCase().replace(/\s+/g, '-'),
+      label: license.toString()
+    }));
+
     return {
-      poolBundles: data.bundles || [],
-      poolOperatingSystems: data.operatingSystems || [],
-      poolLicenseOptions: data.licenseOptions || [],
+      poolBundles: Array.from(uniqueBundles.values()),
+      poolOperatingSystems,
+      poolLicenseOptions,
+      rawMetadata: data // Keep raw data for debugging
     };
+
   } catch (error) {
-    console.error("[Pool] Error fetching pool bundles:", error);
-    // Return empty arrays as fallback
-    return {
-      poolBundles: [],
-      poolOperatingSystems: [],
-      poolLicenseOptions: [],
-      error: error instanceof Error ? error.message : "Failed to fetch pool bundles"
-    };
+    console.error('[Pool] Error fetching pool bundles:', error);
+    throw error;
   }
 }
