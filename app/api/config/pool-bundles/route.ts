@@ -38,6 +38,63 @@ function extractPoolBundleSpecs(selectors: any) {
   };
 }
 
+interface BundleSelector {
+  Bundle: string;
+  vCPU: string;
+  Memory: string;
+  rootVolume: string;
+  "Operating System": string;
+  License: string;
+  "Running Mode": string;
+  "Product Family": string;
+}
+
+interface BundlePrice {
+  hourlyRate: number;
+  monthlyRate: number;
+  unit: string;
+}
+
+interface BundlePricing {
+  "Included"?: BundlePrice;
+  "Bring Your Own License"?: BundlePrice;
+  hourlyRate: number;
+  monthlyRate: number;
+  unit: string;
+  config: BundleSelector & { region: string };
+}
+
+interface Bundle {
+  id: string;
+  name: string;
+  price: number;
+  rawPrice: number;
+  hourlyPrice: number;
+  displayPrice: string;
+  displayHourlyPrice: string;
+  specs: {
+    type: string;
+    vCPU: number;
+    memory: number;
+    storage: number;
+    graphics: string;
+    gpu: boolean;
+  };
+  type: string;
+  pricingSource: string;
+  pricingUnit: string;
+  selectors: BundleSelector;
+  licensePricing: {
+    included: BundlePrice & { displayPrice: string; displayHourlyPrice: string };
+    byol: BundlePrice & { displayPrice: string; displayHourlyPrice: string };
+  };
+}
+
+interface DropdownOption {
+  value: string;
+  label: string;
+}
+
 export async function GET(request: Request) {
   try {
     // Get region from query parameter
@@ -51,9 +108,9 @@ export async function GET(request: Request) {
     console.log(`[Pool API] Processing request for region: ${region}`);
     
     // Fetch bundle information for the specified region
-    let bundles = [];
-    let operatingSystems = [];
-    let licenseOptions = [];
+    let bundles: Bundle[] = [];
+    let operatingSystems: DropdownOption[] = [];
+    let licenseOptions: DropdownOption[] = [];
     
     try {
       // Get the formatted region name
@@ -70,13 +127,13 @@ export async function GET(request: Request) {
       
       if (bundlesResponse && bundlesResponse.aggregations) {
         // Extract unique bundle configurations and options
-        const uniqueBundleConfigs = new Map();
-        const uniqueOS = new Set();
-        const uniqueLicenses = new Set();
-        const bundleConfigs = []; // Store full configurations for price lookup
+        const uniqueBundleConfigs = new Map<string, BundleSelector>();
+        const uniqueOS = new Set<string>();
+        const uniqueLicenses = new Set<string>();
+        const bundleConfigs: BundleSelector[] = []; // Store full configurations for price lookup
         
         // Process each bundle in the response
-        bundlesResponse.aggregations.forEach(item => {
+        bundlesResponse.aggregations.forEach((item: { selectors: BundleSelector }) => {
           if (item.selectors) {
             const bundleType = item.selectors.Bundle;
             const vCPU = item.selectors.vCPU;
@@ -102,7 +159,7 @@ export async function GET(request: Request) {
         });
         
         // Fetch actual prices for bundles from AWS API
-        const bundlePrices = new Map(); // Map to store bundle prices
+        const bundlePrices = new Map<string, BundlePricing>();
         
         // Fetch prices for each unique bundle configuration
         for (const config of bundleConfigs) {
@@ -113,8 +170,8 @@ export async function GET(request: Request) {
             if (bundlePrices.has(bundleKey)) continue;
             
             // We'll fetch pricing for both license types to compare
-            const licenseTypes = ["Included", "Bring Your Own License"];
-            const pricingByLicense = {};
+            const licenseTypes = ["Included", "Bring Your Own License"] as const;
+            const pricingByLicense: Record<string, BundlePrice> = {};
             
             // Fetch pricing for each license type
             for (const licenseType of licenseTypes) {
@@ -126,7 +183,7 @@ export async function GET(request: Request) {
                 encodeURIComponent(config.rootVolume),
                 encodeURIComponent(config.Memory),
                 encodeURIComponent(config["Operating System"]),
-                encodeURIComponent(licenseType), // Use the specific license type we're checking
+                encodeURIComponent(licenseType),
                 encodeURIComponent(config["Running Mode"]),
                 encodeURIComponent(config["Product Family"])
               ];
@@ -249,12 +306,14 @@ export async function GET(request: Request) {
               included: {
                 hourlyRate: hourlyRate,
                 monthlyRate: formattedMonthlyPrice,
+                unit: priceData?.unit || "hour",
                 displayPrice: formatPriceForDisplay(formattedMonthlyPrice),
                 displayHourlyPrice: formatHourlyPriceForDisplay(hourlyRate)
               },
               byol: {
                 hourlyRate: byolHourlyRate,
                 monthlyRate: formattedByolMonthlyPrice,
+                unit: priceData?.unit || "hour",
                 displayPrice: formatPriceForDisplay(formattedByolMonthlyPrice),
                 displayHourlyPrice: formatHourlyPriceForDisplay(byolHourlyRate)
               }
