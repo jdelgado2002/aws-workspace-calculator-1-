@@ -9,21 +9,11 @@ import { Slider } from '@/components/ui/slider';
 import { calculateAppStreamPricing, fetchAppStreamBundles, fetchAppStreamConfig } from '@/lib/api';
 import { regions } from '@/lib/regions';
 import { Button } from '@/components/ui/button';
-import { AppStreamUsagePattern } from '@/components/appstream-usage-pattern';
 import CostSummaryPanel from './cost-summary-panel';
+import { AppStreamUsagePattern } from './appstream-usage-pattern'; // Import the component here
+import type { AppStreamUsagePattern as AppStreamUsagePatternType } from "@/types/appstream"; // Import the type with an alias
 
-interface AppStreamUsagePattern {
-  weekdayDaysCount: number;
-  weekdayPeakHoursPerDay: number;
-  weekdayOffPeakConcurrentUsers: number;
-  weekdayPeakConcurrentUsers: number;
-  weekendDaysCount: number;
-  weekendPeakHoursPerDay: number;
-  weekendOffPeakConcurrentUsers: number;
-  weekendPeakConcurrentUsers: number;
-}
-
-const DEFAULT_USAGE_PATTERN: AppStreamUsagePattern = {
+const DEFAULT_USAGE_PATTERN: AppStreamUsagePatternType = {
   weekdayDaysCount: 5,
   weekdayPeakHoursPerDay: 8,
   weekdayOffPeakConcurrentUsers: 10,
@@ -53,8 +43,8 @@ export default function AppStreamCalculator() {
   const [usageHours, setUsageHours] = useState<number>(730);
   const [usersPerInstance, setUsersPerInstance] = useState<number>(1);
   const [numberOfInstances, setNumberOfInstances] = useState<number>(1);
-  const [usagePattern, setUsagePattern] = useState<AppStreamUsagePattern>(DEFAULT_USAGE_PATTERN);
-  const [userCount, setUserCount] = useState<number>(10);
+  const [usagePattern, setUsagePattern] = useState<AppStreamUsagePatternType>(DEFAULT_USAGE_PATTERN);
+  const [userCount, setUserCount] = useState<number>(10); // Changed default from 10 to 100
 
   // State for pricing results
   const [pricingEstimate, setPricingEstimate] = useState<any>(null);
@@ -151,6 +141,7 @@ export default function AppStreamCalculator() {
         usersPerInstance: usersPerInstance,
         numberOfInstances: numberOfInstances,
         userCount: userCount,
+        bufferFactor: 0.1, // Ensure we're explicitly sending the buffer factor
         weekdayDaysCount: usagePattern.weekdayDaysCount,
         weekdayPeakHoursPerDay: usagePattern.weekdayPeakHoursPerDay,
         weekdayPeakConcurrentUsers: usagePattern.weekdayPeakConcurrentUsers,
@@ -178,9 +169,11 @@ export default function AppStreamCalculator() {
           userLicenseCost: result.userLicenseCost || 0,
           activeStreamingCost: result.instanceCost || 0,
           stoppedInstanceCost: 0,
+          hourlyStreamingRate: result.hourlyPrice, // Pass through the hourly rate from the API
           totalInstanceHours: result.totalInstanceHours || 0,
           utilizedInstanceHours: result.utilizedInstanceHours || 0,
           bufferInstanceHours: result.bufferInstanceHours || 0,
+          bufferFactor: result.details?.calculationDetails?.bufferFactor || 0.1, // Pass through the buffer factor
         },
         // Include original details for debugging
         originalDetails: result.details
@@ -229,7 +222,7 @@ export default function AppStreamCalculator() {
 
             {/* Basic service settings section */}
             <div className="space-y-6">
-              {/* Existing region selector */}
+              {/* Region selector */}
               <div className="space-y-2">
                 <Label htmlFor="region">Region</Label>
                 <Select 
@@ -249,7 +242,56 @@ export default function AppStreamCalculator() {
                 </Select>
               </div>
 
-              {/* Add Instance Family selector before Instance Function */}
+              {/* Users per month - updated for higher user counts */}
+              <div>
+                <Label htmlFor="userCount">Users per Month</Label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    type="number"
+                    id="userCount"
+                    value={userCount}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 1;
+                      setUserCount(value);
+                      
+                      // Update concurrent users if they exceed the new total
+                      const updates: Partial<AppStreamUsagePatternType> = {};
+                      if (usagePattern.weekdayPeakConcurrentUsers > value) {
+                        updates.weekdayPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekdayOffPeakConcurrentUsers > value) {
+                        updates.weekdayOffPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekendPeakConcurrentUsers > value) {
+                        updates.weekendPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekendOffPeakConcurrentUsers > value) {
+                        updates.weekendOffPeakConcurrentUsers = value;
+                      }
+                      
+                      if (Object.keys(updates).length > 0) {
+                        setUsagePattern({...usagePattern, ...updates});
+                      }
+                    }}
+                    min={1}
+                    max={10000}
+                    className="w-24"
+                  />
+                  <Slider
+                    value={[userCount]}
+                    onValueChange={(value) => setUserCount(value[0])}
+                    min={1}
+                    max={1000}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>1</span>
+                  <span>Drag for up to 1,000 (type for up to 10,000)</span>
+                </div>
+              </div>
+
+              {/* Other service settings */}
               <div className="space-y-2">
                 <Label htmlFor="instanceFamily">Instance Family</Label>
                 <Select 
@@ -379,29 +421,6 @@ export default function AppStreamCalculator() {
                   </div>
                 </div>
               )}
-
-              {/* Users per month */}
-              <div>
-                <Label htmlFor="userCount">Users per Month</Label>
-                <div className="flex items-center space-x-2">
-                  <Input
-                    type="number"
-                    id="userCount"
-                    value={userCount}
-                    onChange={(e) => setUserCount(parseInt(e.target.value) || 1)}
-                    min={1}
-                    max={1000}
-                    className="w-20"
-                  />
-                  <Slider
-                    value={[userCount]}
-                    onValueChange={(value) => setUserCount(value[0])}
-                    min={1}
-                    max={100}
-                    className="flex-1"
-                  />
-                </div>
-              </div>
             </div>
           </CardContent>
         </Card>
@@ -416,17 +435,18 @@ export default function AppStreamCalculator() {
             <AppStreamUsagePattern 
               value={usagePattern} 
               onChange={(updates) => setUsagePattern({...usagePattern, ...updates})}
+              maxUsers={userCount}
             />
           </CardContent>
         </Card>
       </div>
 
-      {/* Cost Summary Panel - use the existing component */}
+      {/* Cost Summary Panel */}
       <CostSummaryPanel 
         config={appstreamConfig}
         pricingEstimate={pricingEstimate}
         isLoading={loading}
-        activeTab="pool" // Set to pool to use pool visualization
+        activeTab="pool"
       />
     </div>
   );

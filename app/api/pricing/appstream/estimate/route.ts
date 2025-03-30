@@ -16,10 +16,20 @@ export async function POST(request: Request) {
       usagePattern = 'always-on',
       userCount = 10,
       bufferFactor = 0.1, // Default buffer factor
-      peakHoursPerWeekday = 8,
-      peakHoursPerWeekendDay = 10,
-      includeWeekends = true
+      includeWeekends = true,
+      // Extract the concurrent user values from the request
+      weekdayPeakConcurrentUsers = 80,
+      weekdayOffPeakConcurrentUsers = 10,
+      weekendPeakConcurrentUsers = 40,
+      weekendOffPeakConcurrentUsers = 5,
+      weekdayDaysCount = 5,
+      weekdayPeakHoursPerDay = 8,
+      weekendDaysCount = 2,
+      weekendPeakHoursPerDay = 4
     } = data;
+    
+    // Ensure bufferFactor is properly parsed as a number
+    const parsedBufferFactor = typeof bufferFactor === 'string' ? parseFloat(bufferFactor) : (bufferFactor ?? 0.1);
     
     if (!region || !instanceType || !instanceFamily || !instanceFunction || !operatingSystem) {
       return NextResponse.json({
@@ -153,129 +163,111 @@ export async function POST(request: Request) {
     let calculationDetails = {};
     
     if (usagePattern === 'always-on') {
-      // 24/7 calculation - straightforward
       const hoursInMonth = 730;
-      totalInstanceHours = hoursInMonth * numberOfInstances;
-      
+      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalUtilizedHours = hoursInMonth * concurrentUsers;
+      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
+
       calculationDetails = {
-        hoursPerMonth: hoursInMonth,
-        instances: numberOfInstances,
-        pattern: 'Always-On (24/7)'
+        hoursInMonth,
+        userCount,
+        concurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'Always-On (24/7)',
+        bufferFactor: parsedBufferFactor
       };
     } 
     else if (usagePattern === 'business-hours') {
-      // Business hours calculation
-      const weekdaysPerMonth = 21.7; // Average number of weekdays in a month
-      const businessHoursPerDay = 8; // 8 hours per day
-      const hoursPerMonth = weekdaysPerMonth * businessHoursPerDay;
-      
-      // Calculate required instances based on user count and users per instance
-      let requiredInstances = multiSession === 'true' ? 
-        Math.ceil(userCount / usersPerInstance) : userCount;
-        
-      // Add buffer instances
-      const bufferInstances = Math.ceil(requiredInstances * bufferFactor);
-      const totalRequiredInstances = requiredInstances + bufferInstances;
-      
-      totalUtilizedHours = hoursPerMonth * requiredInstances;
-      totalBufferHours = hoursPerMonth * bufferInstances;
-      totalInstanceHours = hoursPerMonth * totalRequiredInstances;
-      
+      const weeksPerMonth = 4.35;
+      const hoursPerDay = 8;
+      const weekdayBusinessHours = weekdayDaysCount * hoursPerDay * weeksPerMonth;
+
+      const businessHours = weekdayBusinessHours * Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalBufferHours = businessHours * parsedBufferFactor;
+      totalUtilizedHours = businessHours;
+      totalInstanceHours = businessHours + totalBufferHours;
+
       calculationDetails = {
-        weekdaysPerMonth,
-        businessHoursPerDay,
-        hoursPerMonth,
+        weeksPerMonth,
+        weekdayBusinessHours,
         userCount,
-        usersPerInstance,
-        requiredInstances,
-        bufferInstances,
-        totalRequiredInstances,
+        peakConcurrentUsers: weekdayPeakConcurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
         pattern: 'Business Hours',
-        utilizedHours: totalUtilizedHours,
-        bufferHours: totalBufferHours
+        bufferFactor: parsedBufferFactor
       };
     }
     else if (usagePattern === 'custom') {
-      // Custom calculation using AWS methodology
-      const weeksPerMonth = 4.35; // 730 hours in a month / 168 hours in a week
-      const weekdayWorkingHoursPerMonth = 24 * 5 * weeksPerMonth; // 24 hours * 5 days * 4.35 weeks
-      const weekendWorkingHoursPerMonth = includeWeekends ? 24 * 2 * weeksPerMonth : 0; // 24 hours * 2 days * 4.35 weeks (if weekends included)
-      
+      const weeksPerMonth = 4.35;
+
       // Weekday calculations
-      const weekdayPeakHoursPerMonth = peakHoursPerWeekday * 5 * weeksPerMonth;
-      const weekdayOffPeakHoursPerMonth = weekdayWorkingHoursPerMonth - weekdayPeakHoursPerMonth;
-      
-      // Calculate required instances based on user count and users per instance
-      const requiredInstances = multiSession === 'true' ? 
-        Math.ceil(userCount / usersPerInstance) : userCount;
-      
-      // Weekday utilized hours
-      const weekdayPeakUtilizedHours = weekdayPeakHoursPerMonth * requiredInstances;
-      const weekdayOffPeakUtilizedHours = weekdayOffPeakHoursPerMonth * requiredInstances;
-      const weekdayTotalUtilizedHours = weekdayPeakUtilizedHours + weekdayOffPeakUtilizedHours;
-      
-      // Weekday buffer hours
-      const weekdayPeakBufferInstances = Math.ceil(requiredInstances * bufferFactor);
-      const weekdayOffPeakBufferInstances = Math.ceil(requiredInstances * bufferFactor);
-      const weekdayPeakBufferHours = weekdayPeakHoursPerMonth * weekdayPeakBufferInstances;
-      const weekdayOffPeakBufferHours = weekdayOffPeakHoursPerMonth * weekdayOffPeakBufferInstances;
-      const weekdayTotalBufferHours = weekdayPeakBufferHours + weekdayOffPeakBufferHours;
-      
-      let weekendTotalUtilizedHours = 0;
-      let weekendTotalBufferHours = 0;
-      
+      const weekdayPeakHoursPerMonth = weekdayPeakHoursPerDay * weekdayDaysCount * weeksPerMonth;
+      const weekdayOffPeakHoursPerMonth = (24 * weekdayDaysCount * weeksPerMonth) - weekdayPeakHoursPerMonth;
+
+      const weekdayPeakHours = weekdayPeakHoursPerMonth * Math.min(weekdayPeakConcurrentUsers, userCount);
+      const weekdayOffPeakHours = weekdayOffPeakHoursPerMonth * Math.min(weekdayOffPeakConcurrentUsers, userCount);
+
       // Weekend calculations (if included)
+      let weekendPeakHours = 0;
+      let weekendOffPeakHours = 0;
+      let weekendPeakHoursPerMonth = 0;
+      let weekendOffPeakHoursPerMonth = 0;
+
       if (includeWeekends) {
-        const weekendPeakHoursPerMonth = peakHoursPerWeekendDay * 2 * weeksPerMonth;
-        const weekendOffPeakHoursPerMonth = weekendWorkingHoursPerMonth - weekendPeakHoursPerMonth;
-        
-        // Weekend utilized hours
-        const weekendPeakUtilizedHours = weekendPeakHoursPerMonth * requiredInstances;
-        const weekendOffPeakUtilizedHours = weekendOffPeakHoursPerMonth * requiredInstances;
-        weekendTotalUtilizedHours = weekendPeakUtilizedHours + weekendOffPeakUtilizedHours;
-        
-        // Weekend buffer hours
-        const weekendPeakBufferInstances = Math.ceil(requiredInstances * bufferFactor);
-        const weekendOffPeakBufferInstances = Math.ceil(requiredInstances * bufferFactor);
-        const weekendPeakBufferHours = weekendPeakHoursPerMonth * weekendPeakBufferInstances;
-        const weekendOffPeakBufferHours = weekendOffPeakHoursPerMonth * weekendOffPeakBufferInstances;
-        weekendTotalBufferHours = weekendPeakBufferHours + weekendOffPeakBufferHours;
+        weekendPeakHoursPerMonth = weekendPeakHoursPerDay * weekendDaysCount * weeksPerMonth;
+        weekendOffPeakHoursPerMonth = (24 * weekendDaysCount * weeksPerMonth) - weekendPeakHoursPerMonth;
+
+        weekendPeakHours = weekendPeakHoursPerMonth * Math.min(weekendPeakConcurrentUsers, userCount);
+        weekendOffPeakHours = weekendOffPeakHoursPerMonth * Math.min(weekendOffPeakConcurrentUsers, userCount);
       }
-      
-      // Total hours
-      totalUtilizedHours = weekdayTotalUtilizedHours + weekendTotalUtilizedHours;
-      totalBufferHours = weekdayTotalBufferHours + weekendTotalBufferHours;
+
+      totalUtilizedHours = weekdayPeakHours + weekdayOffPeakHours + weekendPeakHours + weekendOffPeakHours;
+      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
       totalInstanceHours = totalUtilizedHours + totalBufferHours;
-      
+
       calculationDetails = {
         weeksPerMonth,
-        weekdayWorkingHoursPerMonth,
-        weekendWorkingHoursPerMonth,
         weekdayPeakHoursPerMonth,
         weekdayOffPeakHoursPerMonth,
-        userCount,
-        usersPerInstance,
-        requiredInstances,
-        weekdayTotalUtilizedHours,
-        weekdayTotalBufferHours,
-        weekendTotalUtilizedHours,
-        weekendTotalBufferHours,
+        weekendPeakHoursPerMonth,
+        weekendOffPeakHoursPerMonth,
+        weekdayPeakConcurrentUsers: Math.min(weekdayPeakConcurrentUsers, userCount),
+        weekdayOffPeakConcurrentUsers: Math.min(weekdayOffPeakConcurrentUsers, userCount),
+        weekendPeakConcurrentUsers: Math.min(weekendPeakConcurrentUsers, userCount),
+        weekendOffPeakConcurrentUsers: Math.min(weekendOffPeakConcurrentUsers, userCount),
+        weekdayPeakHours,
+        weekdayOffPeakHours,
+        weekendPeakHours,
+        weekendOffPeakHours,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
         pattern: 'Custom',
         includeWeekends,
-        peakHoursPerWeekday,
-        peakHoursPerWeekendDay,
-        bufferFactor
+        bufferFactor: parsedBufferFactor
       };
     } 
     else {
       // Default to simple calculation based on provided hours
       const estimatedMonthlyHours = usageHours || 730; // Default to 730 hours (average month)
-      totalInstanceHours = estimatedMonthlyHours * numberOfInstances;
+      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalUtilizedHours = estimatedMonthlyHours * concurrentUsers;
+      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
       
       calculationDetails = {
         userSpecifiedHours: estimatedMonthlyHours,
-        instances: numberOfInstances,
-        pattern: 'User Specified'
+        concurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'User Specified',
+        bufferFactor: parsedBufferFactor
       };
     }
     
@@ -285,8 +277,8 @@ export async function POST(request: Request) {
     const totalMonthlyCost = instanceCost + userLicenseCost;
     
     // Calculate per user costs
-    const effectiveUserCount = userCount > 0 ? userCount : (numberOfInstances * usersPerInstance);
-    const costPerUser = effectiveUserCount > 0 ? totalMonthlyCost / effectiveUserCount : 0;
+    const effectiveUserCount = userCount > 0 ? userCount : 1;
+    const costPerUser = totalMonthlyCost / effectiveUserCount;
     
     // Calculate annual cost and savings
     const annualCost = totalMonthlyCost * 12;
@@ -318,7 +310,9 @@ export async function POST(request: Request) {
         instanceFamily: instanceFamily,
         instanceFunction: instanceFunction,
         operatingSystem: operatingSystem,
-        multiSession: multiSession === 'true'
+        multiSession: multiSession === 'true',
+        userCount: userCount,
+        bufferFactor: parsedBufferFactor  // Include buffer factor in response
       }
     });
   } catch (error) {

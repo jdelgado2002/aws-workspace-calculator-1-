@@ -82,7 +82,7 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   console.log(`Pool calculation with license=${license}, using rate=${ACTIVE_STREAMING_RATE}/hr (base rate=${baseHourlyRate}/hr)`);
   
   const STOPPED_INSTANCE_RATE = 0.03; // USD per hour for stopped instances (corrected from 0.025 to 0.03)
-  const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
+  const BUFFER_FACTOR = 0.10; // 10% buffer factor as a decimal
   const WEEKS_PER_MONTH = 4.35; // AWS uses 730 hours / 168 hours = 4.35 weeks per month
   
   // 1. Calculate user license costs - only if using included license
@@ -108,12 +108,9 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekdayUtilizedHours = peakWeekdayInstanceHours + offPeakWeekdayInstanceHours;
   
   // 3. Calculate weekday buffer hours (stopped instances)
-  // Important: AWS rounds UP buffer instances, not down
-  const peakWeekdayBufferInstances = Math.ceil(peakWeekdayConcurrentUsers * BUFFER_FACTOR);
-  const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayConcurrentUsers * BUFFER_FACTOR);
-  
-  const peakWeekdayBufferHours = peakWeekdayBufferInstances * peakWeekdayHours;
-  const offPeakWeekdayBufferHours = offPeakWeekdayBufferInstances * offPeakWeekdayHours;
+  // Important: Apply buffer factor directly to instance hours
+  const peakWeekdayBufferHours = peakWeekdayInstanceHours * BUFFER_FACTOR;
+  const offPeakWeekdayBufferHours = offPeakWeekdayInstanceHours * BUFFER_FACTOR;
   const totalWeekdayBufferHours = peakWeekdayBufferHours + offPeakWeekdayBufferHours;
   
   // 4. Calculate weekend usage hours
@@ -135,11 +132,8 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekendUtilizedHours = peakWeekendInstanceHours + offPeakWeekendInstanceHours;
   
   // 5. Calculate weekend buffer hours (stopped instances)
-  const peakWeekendBufferInstances = Math.ceil(peakWeekendConcurrentUsers * BUFFER_FACTOR);
-  const offPeakWeekendBufferInstances = Math.ceil(offPeakWeekendConcurrentUsers * BUFFER_FACTOR);
-  
-  const peakWeekendBufferHours = peakWeekendBufferInstances * peakWeekendHours;
-  const offPeakWeekendBufferHours = offPeakWeekendBufferInstances * offPeakWeekendHours;
+  const peakWeekendBufferHours = peakWeekendInstanceHours * BUFFER_FACTOR;
+  const offPeakWeekendBufferHours = offPeakWeekendInstanceHours * BUFFER_FACTOR;
   const totalWeekendBufferHours = peakWeekendBufferHours + offPeakWeekendBufferHours;
   
   // 6. Calculate total hours
