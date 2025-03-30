@@ -1,0 +1,516 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
+import { calculateAppStreamPricing, fetchAppStreamBundles, fetchAppStreamConfig } from '@/lib/api';
+import { regions } from '@/lib/regions';
+import { Button } from '@/components/ui/button';
+import CostSummaryPanel from './cost-summary-panel';
+import { AppStreamUsagePattern } from './appstream-usage-pattern'; // Import the component here
+import type { AppStreamUsagePattern as AppStreamUsagePatternType } from "@/types/appstream"; // Import the type with an alias
+
+const DEFAULT_USAGE_PATTERN: AppStreamUsagePatternType = {
+  weekdayDaysCount: 5,
+  weekdayPeakHoursPerDay: 8,
+  weekdayOffPeakConcurrentUsers: 10,
+  weekdayPeakConcurrentUsers: 80,
+  weekendDaysCount: 2,
+  weekendPeakHoursPerDay: 4,
+  weekendOffPeakConcurrentUsers: 5,
+  weekendPeakConcurrentUsers: 40
+};
+
+export default function AppStreamCalculator() {
+  // State for configuration options
+  const [regionData, setRegionData] = useState<any>(null);
+  const [instanceFamilies, setInstanceFamilies] = useState<any[]>([]);
+  const [instanceFunctions, setInstanceFunctions] = useState<any[]>([]);
+  const [operatingSystems, setOperatingSystems] = useState<any[]>([]);
+  const [multiSessionOptions, setMultiSessionOptions] = useState<any[]>([]);
+  const [bundles, setBundles] = useState<any[]>([]);
+  
+  // State for user selections
+  const [selectedRegion, setSelectedRegion] = useState<string>('us-east-1');
+  const [selectedInstanceFamily, setSelectedInstanceFamily] = useState<string>('');
+  const [selectedInstanceFunction, setSelectedInstanceFunction] = useState<string>('');
+  const [selectedBundle, setSelectedBundle] = useState<string>('');
+  const [selectedOS, setSelectedOS] = useState<string>('');
+  const [selectedMultiSession, setSelectedMultiSession] = useState<string>('false');
+  const [usageHours, setUsageHours] = useState<number>(730);
+  const [bufferFactor, setBufferFactor] = useState<number>(0.1); // Add buffer factor state
+  const [usersPerInstance, setUsersPerInstance] = useState<number>(1);
+  const [numberOfInstances, setNumberOfInstances] = useState<number>(1);
+  const [usagePattern, setUsagePattern] = useState<AppStreamUsagePatternType>(DEFAULT_USAGE_PATTERN);
+  const [userCount, setUserCount] = useState<number>(10); // Changed default from 10 to 100
+
+  // State for pricing results
+  const [pricingEstimate, setPricingEstimate] = useState<any>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  
+  // Create a WorkSpaceConfig-like object for CostSummaryPanel
+  const appstreamConfig = {
+    region: selectedRegion,
+    bundleId: selectedBundle,
+    bundleSpecs: bundles.find(b => b.id === selectedBundle)?.specs || {
+      vCPU: 0,
+      memory: 0,
+      storage: 0,
+      graphics: 'Standard'
+    },
+    numberOfWorkspaces: userCount,
+    operatingSystem: selectedOS,
+    // Add Pool specifics for the CostSummaryPanel
+    poolUsagePattern: usagePattern,
+    poolNumberOfUsers: userCount,
+    poolLicense: selectedOS === 'windows' ? 'included' : 'not-applicable',
+    isAppStream: true // Flag to identify this as AppStream config
+  };
+  
+  // Fetch initial configuration when region changes
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const config = await fetchAppStreamConfig(selectedRegion);
+        setRegionData(config.region);
+        setInstanceFamilies(config.instanceFamilies);
+        setInstanceFunctions(config.instanceFunctions);
+        setOperatingSystems(config.operatingSystems);
+        setMultiSessionOptions(config.multiSession);
+        
+        // Reset dependent selections
+        setSelectedInstanceFamily('');
+        setSelectedInstanceFunction('');
+        setSelectedBundle('');
+        setSelectedOS('');
+        setBundles([]);
+        setPricingEstimate(null);
+      } catch (error) {
+        console.error('Failed to load AppStream configuration:', error);
+      }
+    };
+    
+    loadConfig();
+  }, [selectedRegion]);
+  
+  // Fetch bundles when instance family or function changes
+  useEffect(() => {
+    const loadBundles = async () => {
+      if (selectedInstanceFamily && selectedInstanceFunction) {
+        try {
+          const bundlesData = await fetchAppStreamBundles(
+            selectedRegion,
+            selectedInstanceFamily,
+            selectedInstanceFunction
+          );
+          
+          setBundles(bundlesData.bundles);
+          setSelectedBundle('');
+        } catch (error) {
+          console.error('Failed to load AppStream bundles:', error);
+        }
+      }
+    };
+    
+    loadBundles();
+  }, [selectedRegion, selectedInstanceFamily, selectedInstanceFunction]);
+  
+  // Calculate pricing when selections change
+  const handleCalculatePrice = async () => {
+    if (!selectedRegion || !selectedInstanceFamily || !selectedInstanceFunction || 
+        !selectedBundle || !selectedOS) {
+      // Show error or validation message
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const bundle = bundles.find(b => b.id === selectedBundle);
+      
+      // Get the instance specs from the already loaded bundle data
+      const instanceSpecs = bundle ? {
+        vcpu: bundle.vcpu,
+        memory: bundle.memory,
+        videoMemory: bundle.videoMemory
+      } : null;
+      
+      const params = {
+        region: selectedRegion,
+        instanceType: selectedBundle,
+        instanceFamily: selectedInstanceFamily,
+        instanceFunction: selectedInstanceFunction,
+        operatingSystem: selectedOS,
+        multiSession: selectedMultiSession,
+        usagePattern: 'custom',
+        usageHours: usageHours,
+        usersPerInstance: usersPerInstance,
+        numberOfInstances: numberOfInstances,
+        userCount: userCount,
+        bufferFactor: selectedInstanceFunction === 'elasticfleet' ? 0 : bufferFactor,
+        weekdayDaysCount: usagePattern.weekdayDaysCount,
+        weekdayPeakHoursPerDay: usagePattern.weekdayPeakHoursPerDay,
+        weekdayPeakConcurrentUsers: usagePattern.weekdayPeakConcurrentUsers,
+        weekdayOffPeakConcurrentUsers: usagePattern.weekdayOffPeakConcurrentUsers,
+        weekendDaysCount: usagePattern.weekendDaysCount,
+        weekendPeakHoursPerDay: usagePattern.weekendPeakHoursPerDay, 
+        weekendPeakConcurrentUsers: usagePattern.weekendPeakConcurrentUsers,
+        weekendOffPeakConcurrentUsers: usagePattern.weekendOffPeakConcurrentUsers,
+        
+        // Pass the instance specs to avoid redundant API calls
+        instanceSpecs: instanceSpecs
+      };
+      
+      const result = await calculateAppStreamPricing(params);
+      
+      // Log the raw pricing information for debugging
+      console.log('API pricing result:', result);
+      console.log(`AWS hourly rate: $${result.hourlyPrice} per hour`);
+      console.log(`Total hours: ${result.totalInstanceHours}`);
+      console.log(`Expected cost: ${result.totalInstanceHours} × $${result.hourlyPrice} = $${(result.totalInstanceHours * result.hourlyPrice).toFixed(2)}`);
+      console.log(`API returned cost: $${result.instanceCost.toFixed(2)}`);
+      
+      // Check for potential calculation issues
+      if (result.totalInstanceHours === 0 && result.instanceCost === 0) {
+        console.warn('WARNING: Zero hours detected in the calculation response!');
+      }
+      
+      // Format the response to match PricingEstimate structure for CostSummaryPanel
+      const formattedEstimate = {
+        costPerWorkspace: result.costPerUser || 0,
+        totalMonthlyCost: result.totalMonthlyCost || 0,
+        annualEstimate: result.annualCost || 0,
+        bundleName: bundle?.name || 'AppStream Bundle',
+        billingModel: 'Hourly',
+        baseCost: result.hourlyPrice * 730, // Convert hourly to monthly for base reference
+        pricingSource: 'aws-api',
+        license: selectedOS === 'windows' ? 'included' : 'not-applicable',
+        // Use the exact values from the API response
+        poolPricingDetails: {
+          userLicenseCost: result.userLicenseCost || 0,
+          // Verify that we're using the correct active streaming cost calculation
+          activeStreamingCost: result.instanceCost || (result.hourlyPrice * result.totalInstanceHours),
+          stoppedInstanceCost: 0,
+          hourlyStreamingRate: result.hourlyPrice,
+          stoppedInstanceRate: 0.03,
+          totalInstanceHours: result.totalInstanceHours || 0,
+          totalUtilizedHours: result.utilizedInstanceHours || 0,
+          totalBufferHours: result.bufferInstanceHours || 0,
+          originalRate: result.details?.baseInstancePrice || result.hourlyPrice
+        },
+        _rawApiResponse: result
+      };
+      
+      // Ensure the total monthly cost matches what we expect
+      console.log(`Re-verification in component:
+        Hourly rate × hours = $${(result.hourlyPrice * result.totalInstanceHours).toFixed(2)} 
+        API instance cost = $${result.instanceCost.toFixed(2)}
+        Formatted active cost = $${formattedEstimate.poolPricingDetails.activeStreamingCost.toFixed(2)}
+        Total monthly with license = $${formattedEstimate.totalMonthlyCost.toFixed(2)}
+      `);
+      
+      setPricingEstimate(formattedEstimate);
+    } catch (error) {
+      console.error('Failed to calculate pricing:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Add useEffect to calculate pricing when key values change
+  useEffect(() => {
+    if (selectedRegion && selectedInstanceFamily && selectedInstanceFunction && 
+        selectedBundle && selectedOS) {
+      handleCalculatePrice();
+    }
+  }, [selectedRegion, selectedInstanceFamily, selectedInstanceFunction, selectedBundle, 
+      selectedOS, selectedMultiSession, usagePattern, userCount, usersPerInstance]);
+
+  // Reset form
+  const handleReset = () => {
+    setSelectedInstanceFamily('');
+    setSelectedInstanceFunction('');
+    setSelectedBundle('');
+    setSelectedOS('');
+    setSelectedMultiSession('false');
+    setUsageHours(730);
+    setUsersPerInstance(1);
+    setNumberOfInstances(1);
+    setBundles([]);
+    setPricingEstimate(null);
+  };
+  
+  return (
+    <div className="grid md:grid-cols-2 gap-6">
+      <div className="space-y-6">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Service Settings</h2>
+              <p className="text-sm text-gray-500">Configure your AppStream 2.0 fleet</p>
+            </div>
+
+            {/* Basic service settings section */}
+            <div className="space-y-6">
+              {/* Region selector */}
+              <div className="space-y-2">
+                <Label htmlFor="region">Region</Label>
+                <Select 
+                  value={selectedRegion} 
+                  onValueChange={setSelectedRegion}
+                >
+                  <SelectTrigger id="region">
+                    <SelectValue placeholder="Select a region" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {regions.map((region) => (
+                      <SelectItem key={region.code} value={region.code}>
+                        {region.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Users per month - updated for higher user counts */}
+              <div>
+                <Label htmlFor="userCount">Users per Month</Label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    type="number"
+                    id="userCount"
+                    value={userCount}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 1;
+                      setUserCount(value);
+                      
+                      // Update concurrent users if they exceed the new total
+                      const updates: Partial<AppStreamUsagePatternType> = {};
+                      if (usagePattern.weekdayPeakConcurrentUsers > value) {
+                        updates.weekdayPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekdayOffPeakConcurrentUsers > value) {
+                        updates.weekdayOffPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekendPeakConcurrentUsers > value) {
+                        updates.weekendPeakConcurrentUsers = value;
+                      }
+                      if (usagePattern.weekendOffPeakConcurrentUsers > value) {
+                        updates.weekendOffPeakConcurrentUsers = value;
+                      }
+                      
+                      if (Object.keys(updates).length > 0) {
+                        setUsagePattern({...usagePattern, ...updates});
+                      }
+                    }}
+                    min={1}
+                    max={10000}
+                    className="w-24"
+                  />
+                  <Slider
+                    value={[userCount]}
+                    onValueChange={(value) => setUserCount(value[0])}
+                    min={1}
+                    max={1000}
+                    className="flex-1"
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>1</span>
+                  <span>Drag for up to 1,000 (type for up to 10,000)</span>
+                </div>
+              </div>
+
+              {/* Other service settings */}
+              <div className="space-y-2">
+                <Label htmlFor="instanceFamily">Instance Family</Label>
+                <Select 
+                  value={selectedInstanceFamily} 
+                  onValueChange={setSelectedInstanceFamily}
+                >
+                  <SelectTrigger id="instanceFamily">
+                    <SelectValue placeholder="Select an instance family" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {instanceFamilies.map((family) => (
+                      <SelectItem key={family.id} value={family.id}>
+                        {family.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Fleet type (instance function) */}
+              <div className="space-y-2">
+                <Label htmlFor="instanceFunction">Instance Function</Label>
+                <Select 
+                  value={selectedInstanceFunction} 
+                  onValueChange={setSelectedInstanceFunction}
+                  disabled={!selectedInstanceFamily}
+                >
+                  <SelectTrigger id="instanceFunction">
+                    <SelectValue placeholder="Select an instance function" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {instanceFunctions.map((func) => (
+                      <SelectItem key={func.id} value={func.id}>
+                        {func.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Instance type */}
+              <div className="space-y-2">
+                <Label htmlFor="bundleType">Bundle Type</Label>
+                <Select 
+                  value={selectedBundle} 
+                  onValueChange={setSelectedBundle}
+                  disabled={!selectedInstanceFamily || !selectedInstanceFunction || bundles.length === 0}
+                >
+                  <SelectTrigger id="bundleType">
+                    <SelectValue placeholder="Select a bundle type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {bundles.map((bundle) => (
+                      <SelectItem key={bundle.id} value={bundle.id}>
+                        {bundle.name} ({bundle.vcpu} vCPU, {bundle.memory} GiB memory
+                        {bundle.videoMemory !== 'N/A' ? `, ${bundle.videoMemory} GiB video memory` : ''})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Multi-session toggle */}
+              <div className="space-y-2">
+                <Label htmlFor="multiSession">Multi-Session</Label>
+                <Select 
+                  value={selectedMultiSession} 
+                  onValueChange={setSelectedMultiSession}
+                  disabled={!selectedBundle}
+                >
+                  <SelectTrigger id="multiSession">
+                    <SelectValue placeholder="Select multi-session option" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {multiSessionOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Operating system */}
+              <div className="space-y-2">
+                <Label htmlFor="operatingSystem">Operating System</Label>
+                <Select 
+                  value={selectedOS} 
+                  onValueChange={setSelectedOS}
+                  disabled={!selectedBundle}
+                >
+                  <SelectTrigger id="operatingSystem">
+                    <SelectValue placeholder="Select an operating system" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {operatingSystems.map((os) => (
+                      <SelectItem key={os.id} value={os.id}>
+                        {os.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Users per session */}
+              {selectedMultiSession === 'true' && (
+                <div className="space-y-2">
+                  <Label htmlFor="usersPerInstance">Users Per Instance</Label>
+                  <div className="flex items-center space-x-2">
+                    <Input
+                      id="usersPerInstance"
+                      type="number"
+                      value={usersPerInstance}
+                      onChange={(e) => setUsersPerInstance(parseInt(e.target.value) || 1)}
+                      min={1}
+                      max={100}
+                      className="w-20"
+                    />
+                    <Slider
+                      value={[usersPerInstance]}
+                      onValueChange={(value) => setUsersPerInstance(value[0])}
+                      min={1}
+                      max={20}
+                      step={1}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Add buffer factor input when not using elastic fleet */}
+              {selectedInstanceFunction != 'elasticfleet' && (
+                <div className="space-y-2">
+                  <Label htmlFor="bufferFactor">Buffer Factor</Label>
+                  <div className="flex items-center space-x-2">
+                    <Input
+                      id="bufferFactor"
+                      type="number"
+                      value={bufferFactor}
+                      onChange={(e) => setBufferFactor(Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)))}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      className="w-20"
+                    />
+                    <Slider
+                      value={[bufferFactor * 100]}
+                      onValueChange={(value) => setBufferFactor(value[0] / 100)}
+                      min={0}
+                      max={100}
+                      step={10}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {bufferFactor * 100}% buffer capacity for scaling
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Usage Pattern</h2>
+              <p className="text-sm text-gray-500">Define your usage requirements</p>
+            </div>
+
+            <AppStreamUsagePattern 
+              value={usagePattern} 
+              onChange={(updates) => setUsagePattern({...usagePattern, ...updates})}
+              maxUsers={userCount}
+            />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Cost Summary Panel */}
+      <CostSummaryPanel 
+        config={appstreamConfig}
+        pricingEstimate={pricingEstimate}
+        isLoading={loading}
+        activeTab="pool"
+      />
+    </div>
+  );
+}

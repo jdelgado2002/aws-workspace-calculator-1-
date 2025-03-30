@@ -58,35 +58,19 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   // Apply license discount for BYOL
   const isBYOL = license === "bring-your-own-license";
   
-  // Match AWS's exact pricing for the streaming rate
-  // Adjust these rates to match AWS's calculator
-  const BUNDLE_HOURLY_RATES = {
-    'value': { 'included': 0.070, 'byol': 0.059 },
-    'standard': { 'included': 0.090, 'byol': 0.075 },
-    'performance': { 'included': 0.130, 'byol': 0.110 },
-    'power': { 'included': 0.175, 'byol': 0.149 },
-    'powerpro': { 'included': 0.250, 'byol': 0.213 }
-  };
+  // Important: Use the exact hourly rate from the API without modification
+  const ACTIVE_STREAMING_RATE = baseHourlyRate;
   
-  // Default to the provided baseHourlyRate, but prefer our fixed rates
-  // This is critical to match AWS's calculation
-  let ACTIVE_STREAMING_RATE = baseHourlyRate;
+  console.log(`Using API-provided streaming rate directly: $${ACTIVE_STREAMING_RATE}/hr for ${license} license`);
+
+  const STOPPED_INSTANCE_RATE = 0.03; // This rate is fixed per AWS documentation
+  const BUFFER_FACTOR = 0.10; // 10% buffer factor as per AWS calculator
+  const WEEKS_PER_MONTH = 4.35; // 730 hours / 168 hours = 4.35 weeks per month
   
-  // Check if we should apply a fixed rate based on the license
-  if (isBYOL && BUNDLE_HOURLY_RATES['value']['byol']) {
-    ACTIVE_STREAMING_RATE = BUNDLE_HOURLY_RATES['value']['byol']; // Use Value bundle BYOL rate as default
-  } else if (!isBYOL && BUNDLE_HOURLY_RATES['value']['included']) {
-    ACTIVE_STREAMING_RATE = BUNDLE_HOURLY_RATES['value']['included']; // Use Value bundle included rate as default
-  }
-  
-  console.log(`Pool calculation with license=${license}, using rate=${ACTIVE_STREAMING_RATE}/hr (base rate=${baseHourlyRate}/hr)`);
-  
-  const STOPPED_INSTANCE_RATE = 0.03; // USD per hour for stopped instances (corrected from 0.025 to 0.03)
-  const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
-  const WEEKS_PER_MONTH = 4.35; // AWS uses 730 hours / 168 hours = 4.35 weeks per month
-  
-  // 1. Calculate user license costs - only if using included license
-  const userLicenseCost = !isBYOL ? LICENSE_COST_PER_USER * userCount : 0;
+  // Calculate user license costs - only if using included license
+  const userLicenseCost = license !== "bring-your-own-license" && license !== "not-applicable" 
+    ? LICENSE_COST_PER_USER * userCount 
+    : 0;
   
   // 2. Calculate weekday usage hours
   const weekdayDays = usagePattern.weekdayDaysCount;
@@ -108,12 +92,9 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekdayUtilizedHours = peakWeekdayInstanceHours + offPeakWeekdayInstanceHours;
   
   // 3. Calculate weekday buffer hours (stopped instances)
-  // Important: AWS rounds UP buffer instances, not down
-  const peakWeekdayBufferInstances = Math.ceil(peakWeekdayConcurrentUsers * BUFFER_FACTOR);
-  const offPeakWeekdayBufferInstances = Math.ceil(offPeakWeekdayConcurrentUsers * BUFFER_FACTOR);
-  
-  const peakWeekdayBufferHours = peakWeekdayBufferInstances * peakWeekdayHours;
-  const offPeakWeekdayBufferHours = offPeakWeekdayBufferInstances * offPeakWeekdayHours;
+  // Important: Apply buffer factor directly to instance hours
+  const peakWeekdayBufferHours = peakWeekdayInstanceHours * BUFFER_FACTOR;
+  const offPeakWeekdayBufferHours = offPeakWeekdayInstanceHours * BUFFER_FACTOR;
   const totalWeekdayBufferHours = peakWeekdayBufferHours + offPeakWeekdayBufferHours;
   
   // 4. Calculate weekend usage hours
@@ -135,11 +116,8 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   const totalWeekendUtilizedHours = peakWeekendInstanceHours + offPeakWeekendInstanceHours;
   
   // 5. Calculate weekend buffer hours (stopped instances)
-  const peakWeekendBufferInstances = Math.ceil(peakWeekendConcurrentUsers * BUFFER_FACTOR);
-  const offPeakWeekendBufferInstances = Math.ceil(offPeakWeekendConcurrentUsers * BUFFER_FACTOR);
-  
-  const peakWeekendBufferHours = peakWeekendBufferInstances * peakWeekendHours;
-  const offPeakWeekendBufferHours = offPeakWeekendBufferInstances * offPeakWeekendHours;
+  const peakWeekendBufferHours = peakWeekendInstanceHours * BUFFER_FACTOR;
+  const offPeakWeekendBufferHours = offPeakWeekendInstanceHours * BUFFER_FACTOR;
   const totalWeekendBufferHours = peakWeekendBufferHours + offPeakWeekendBufferHours;
   
   // 6. Calculate total hours
@@ -161,6 +139,15 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
     - Stopped instances: ${stoppedInstanceCost.toFixed(2)} (${totalBufferHours} hrs @ $${STOPPED_INSTANCE_RATE}/hr)
     - Total cost: ${totalMonthlyCost.toFixed(2)}
   `);
+
+  // Add debug logging for verification
+  console.log(`Calculation with API rate:
+    Base hourly rate from API: ${baseHourlyRate}
+    Active streaming rate used: ${ACTIVE_STREAMING_RATE}
+    License type: ${license}
+    Total hours: ${totalInstanceHours}
+    Expected cost: ${(totalInstanceHours * ACTIVE_STREAMING_RATE).toFixed(2)}
+  `);
   
   return {
     userLicenseCost,
@@ -177,12 +164,12 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   };
 }
 
-export default function CostSummaryPanel({ config, pricingEstimate, isLoading, activeTab = "core" }: CostSummaryPanelProps) {
-  // Determine if we're showing pool pricing or core pricing based on the active tab
+export default function CostSummaryPanel({ config, pricingEstimate, isLoading, activeTab = "core" }: CostSummaryPanelProps) {   
+  // Determine if we're showing pool pricing or core pricing based on the active tab    
   const isPool = activeTab === "pool";
   
   // Calculate pool-specific metrics
-    
+  
   // Get the number of users for calculations
   const userCount = isPool 
     ? (config.poolNumberOfUsers || 10) 
@@ -192,12 +179,20 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   const licenseType = isPool ? (config.poolLicense || "included") : (config.license || "included");
   
   // Calculate base costs - ensure we have a valid base hourly rate
-  // For pool calculations, we'll let the calculatePoolCosts function apply any license discounts
-  const baseHourlyCost = isPool && pricingEstimate
-    ? (pricingEstimate.baseCost / 730) || 0.12 // Convert monthly to hourly with fallback
-    : 0;
+  // For AppStream calculations, we want to use the exact API-provided rate when available
+  let baseHourlyCost = 0;
   
-  console.log(`Base hourly cost: ${baseHourlyCost}, license: ${licenseType}`);
+  if (isPool && pricingEstimate?.poolPricingDetails?.hourlyStreamingRate) {
+    // Use the exact hourly rate from the API for AppStream
+    baseHourlyCost = pricingEstimate.poolPricingDetails.hourlyStreamingRate;
+    console.log(`Using API-provided hourly rate: $${baseHourlyCost}/hr`);
+  } else if (isPool && pricingEstimate) {
+    // Fallback to converting monthly to hourly if needed
+    baseHourlyCost = (pricingEstimate.baseCost / 730) || 0.12;
+    console.log(`Converted monthly to hourly rate: $${baseHourlyCost}/hr`);
+  }
+  
+  console.log(`Final base hourly cost: ${baseHourlyCost}, license: ${licenseType}`);
   
   // Get the total monthly cost from pricing estimate
   const fullMonthlyCost = pricingEstimate?.totalMonthlyCost || 0;
@@ -206,7 +201,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   let poolCosts = { totalMonthlyCost: 0, userLicenseCost: 0, activeStreamingCost: 0, stoppedInstanceCost: 0, totalInstanceHours: 0 };
   
   if (isPool && pricingEstimate?.poolPricingDetails) {
-    // Use the detailed pool pricing data from the API
+    // Use the detailed pool pricing data from the API  
     poolCosts = {
       totalMonthlyCost: pricingEstimate.totalMonthlyCost || 0,
       userLicenseCost: pricingEstimate.poolPricingDetails.userLicenseCost || 0,
@@ -214,6 +209,21 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
       stoppedInstanceCost: pricingEstimate.poolPricingDetails.stoppedInstanceCost || 0,
       totalInstanceHours: pricingEstimate.poolPricingDetails.totalInstanceHours || 0
     };
+    
+    // Verify the calculation directly in the panel
+    if (pricingEstimate.poolPricingDetails.hourlyStreamingRate && pricingEstimate.poolPricingDetails.totalInstanceHours) {
+      const hourlyRate = pricingEstimate.poolPricingDetails.hourlyStreamingRate;
+      const totalHours = pricingEstimate.poolPricingDetails.totalInstanceHours;
+      const expectedCost = hourlyRate * totalHours;
+      
+      console.log(`Cost Summary Panel Verification:
+        Hours: ${totalHours}
+        Rate: $${hourlyRate}/hr
+        Expected: $${expectedCost.toFixed(2)}
+        Shown: $${poolCosts.activeStreamingCost.toFixed(2)}
+        API Total Monthly: $${pricingEstimate.totalMonthlyCost.toFixed(2)}
+      `);
+    }
   } else if (isPool && config.poolUsagePattern) {
     // Fallback to calculating locally if API data isn't available
     poolCosts = calculatePoolCosts(
@@ -223,14 +233,14 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
       licenseType
     );
   }
-
-  // Ensure we have valid numbers for display
+  
+  // Ensure we have valid numbers for display   
   const poolOptimizedMonthlyCost = isPool ? (poolCosts.totalMonthlyCost || 0) : 0;
   
   // Calculate savings (only for pool)
   
   // Effective cost per user/workspace
-  const effectiveCostPerUser = isPool && userCount > 0
+  const effectiveCostPerUser = isPool && userCount > 0    
     ? poolOptimizedMonthlyCost / userCount
     : pricingEstimate?.costPerWorkspace || 0;
   
@@ -243,13 +253,28 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
       maximumFractionDigits: 2
     }).format(value);
   };
-
+  
   // Format percentage
-
+  
+  // Add validation for potential calculation issues
+  const hasCalculationIssue = isPool && 
+    pricingEstimate?.poolPricingDetails && 
+    pricingEstimate.poolPricingDetails.totalInstanceHours === 0;
+  
   return (
-    <Card className="h-full shadow-sm">
-      <CardContent className="p-6">
+    <Card className="h-full shadow-sm">  
+      <CardContent className="p-6"> 
         <h2 className="text-xl font-bold text-gray-900 mb-6">Pricing Summary</h2>
+        
+        {/* Show warning if we detect issues with the calculation */}
+        {hasCalculationIssue && (
+          <Alert className="mb-4 bg-amber-50 text-amber-800 border-amber-200">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              There may be an issue with the hour calculations. The results shown might not be accurate.
+            </AlertDescription>
+          </Alert>
+        )}
         
         {/* Show a warning if volume selections weren't honored */}
         {pricingEstimate && !pricingEstimate.volumeSelectionHonored && 
@@ -265,7 +290,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
         )}
         
         <div className="flex justify-between items-center mb-1">
-          <h2 className="text-xl font-bold text-gray-900">Cost Summary</h2>
+          <h2 className="text-xl font-bold text-gray-900">Cost Summary</h2>  
           <div className="flex items-center gap-2">
             {pricingEstimate?.pricingSource === "aws-api" && (
               <Badge variant="outline" className="bg-blue-50 text-blue-700 hover:bg-blue-100">
@@ -277,17 +302,17 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
               className={`${isPool ? "bg-purple-50 text-purple-700" : "bg-green-50 text-green-700"}`}
             >
               {isPool ? "Pool" : "Core"}
-            </Badge>
+            </Badge> 
           </div>
         </div>
         <p className="text-sm text-gray-500 mb-6">
-          {isPool 
+          {isPool   
             ? `Estimated Pool costs for ${userCount} users` 
             : `Estimated costs for ${userCount} WorkSpace${userCount > 1 ? "s" : ""}`}
         </p>
 
-        {isLoading ? (
-          <div className="space-y-4">
+        {isLoading ? (  
+          <div className="space-y-4">            
             <Skeleton className="h-10 w-3/4" />
             <Skeleton className="h-4 w-1/2" />
             <div className="space-y-4 my-8">
@@ -302,7 +327,7 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
               {/* Core mode content */}
               {!isPool && (
                 <div className="space-y-4">
-                  <div>
+                  <div className="space-y-4 my-8">
                     <h3 className="text-sm font-medium text-gray-500">
                       Cost per WorkSpace
                     </h3>
@@ -311,7 +336,6 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                       <span className="text-sm font-normal text-gray-500">/mo</span>
                     </p>
                   </div>
-                  
                   <div className="flex items-center gap-2 py-2">
                     <MonitorSmartphone className="h-5 w-5 text-green-600" />
                     <div className="text-sm text-gray-700">
@@ -320,9 +344,9 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                   </div>
                 </div>
               )}
-
+              
               {/* Pool mode content */}
-              {isPool && (
+              {isPool && (                  
                 <div className="space-y-4">
                   <div>
                     <h3 className="text-sm font-medium text-gray-500">
@@ -333,21 +357,19 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                       <span className="text-sm font-normal text-gray-500">/mo</span>
                     </p>
                   </div>
-                  
                   <div className="flex items-center gap-2 py-2">
                     <Users className="h-5 w-5 text-purple-600" />
                     <div className="text-sm text-gray-700">
                       Pool supports <span className="font-medium">{userCount}</span> users
                     </div>
                   </div>
-
                   <div className="bg-blue-50 p-4 rounded-md border border-blue-100">
                     <div className="flex justify-between mb-3">
                       <div className="flex items-center gap-1">
                         <h3 className="text-sm font-medium text-blue-800">Pool Usage Details</h3>
                         <TooltipProvider>
                           <Tooltip>
-                            <TooltipTrigger>
+                            <TooltipTrigger> 
                               <Info className="h-4 w-4 text-blue-500" />
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs">
@@ -359,7 +381,6 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                         </TooltipProvider>
                       </div>
                     </div>
-                    
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-sm text-blue-600">User licenses</span>
@@ -381,11 +402,24 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                         <span className="text-sm font-medium text-blue-700">Total monthly cost</span>
                         <span className="text-sm font-medium">{formatCurrency(poolCosts.totalMonthlyCost)}</span>
                       </div>
+                      {/* Add additional verification display at the bottom */}
+                      {pricingEstimate?.poolPricingDetails?.hourlyStreamingRate && (
+                        <div className="mt-2 pt-2 border-t border-blue-200 text-xs text-blue-700">
+                          <div className="flex justify-between">
+                            <span>Calculation check:</span>
+                            <span>
+                              {pricingEstimate.poolPricingDetails.totalInstanceHours} hrs × 
+                              ${pricingEstimate.poolPricingDetails.hourlyStreamingRate}/hr = 
+                              ${((pricingEstimate.poolPricingDetails.totalInstanceHours || 0) * 
+                                 (pricingEstimate.poolPricingDetails.hourlyStreamingRate || 0)).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
-
               <div className="pt-4 border-t border-gray-200">
                 <h3 className="text-sm font-medium text-gray-500">Total Monthly Cost</h3>
                 <p className="text-3xl font-bold text-gray-900">
@@ -394,7 +428,6 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                     : formatCurrency(fullMonthlyCost)}
                 </p>
               </div>
-
               <div>
                 <h3 className="text-sm font-medium text-gray-500">Annual Estimate</h3>
                 <p className="text-xl font-semibold text-gray-900">
@@ -461,6 +494,20 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                 </>
               )}
             </div>
+
+            {/* Add special debugging for AppStream calculations */}
+            {isPool && config.isAppStream === true && pricingEstimate?.poolPricingDetails && (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-100 rounded-md">
+                <div className="text-xs text-amber-800 font-medium">Pricing Verification</div>
+                <div className="text-xs text-amber-700">
+                  API Rate: ${pricingEstimate.poolPricingDetails.hourlyStreamingRate}/hr<br />
+                  Hours: {Math.round(pricingEstimate.poolPricingDetails.totalInstanceHours || 0)}<br />
+                  Expected: ${((pricingEstimate.poolPricingDetails.hourlyStreamingRate || 0) * 
+                             (pricingEstimate.poolPricingDetails.totalInstanceHours || 0)).toFixed(2)}<br />
+                  Displayed: ${poolCosts.activeStreamingCost.toFixed(2)}
+                </div>
+              </div>
+            )}
           </>
         )}
       </CardContent>

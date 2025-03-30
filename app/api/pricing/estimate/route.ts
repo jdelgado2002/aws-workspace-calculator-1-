@@ -529,7 +529,7 @@ export async function POST(request: Request) {
       // Constants for pool pricing
       const LICENSE_COST_PER_USER = 4.19; // USD per user per month
       const STOPPED_INSTANCE_RATE = 0.03; // USD per hour for stopped instances (updated from 0.025 to 0.03)
-      const BUFFER_FACTOR = 0.10; // 10% buffer per AWS calculator
+      const BUFFER_FACTOR = 0.0; // 10% buffer per AWS calculator
       const WEEKS_PER_MONTH = 4.35; // 730 hours / 168 hours per week = 4.35
       
       // For calculated pricing, apply the discount for BYOL

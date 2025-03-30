@@ -13,6 +13,7 @@ import { getBundlesForRegion } from "@/app/actions/updateBundles"
 import { getPoolOptions } from "@/app/actions/updatePoolOptions"
 import { getPoolBundlesForRegion } from "@/app/actions/updatePoolBundles"
 import { PoolUsagePattern as PoolUsagePatternComponent } from "@/components/pool-usage-pattern"
+import { regions as RegionType } from '@/lib/regions';
 
 // Default values for the pool usage pattern
 const DEFAULT_POOL_USAGE_PATTERN: PoolUsagePattern = {
@@ -35,6 +36,7 @@ interface ConfigurationPanelProps {
   onConfigChange: (config: Partial<WorkSpaceConfig>) => void
   isLoading: boolean
   onTabChange?: (tab: string) => void  // Add this prop
+  regions: typeof RegionType; // Add regions prop type
 }
 
 export default function ConfigurationPanel({
@@ -43,6 +45,7 @@ export default function ConfigurationPanel({
   onConfigChange,
   isLoading,
   onTabChange,
+  regions,
 }: ConfigurationPanelProps) {
   // Add state for region-specific bundle options
   const [currentRegion, setCurrentRegion] = useState(config.region)
@@ -66,7 +69,6 @@ export default function ConfigurationPanel({
   const [poolLicenseOptions, setPoolLicenseOptions] = useState([]);
 
   // Extract options from configOptions - ensure they're available
-  const regions = configOptions?.regions || []
   const operatingSystems = configOptions?.operatingSystems || []
   const licenseOptions = configOptions?.licenseOptions || []
   const runningModes = configOptions?.runningModes || []
@@ -304,6 +306,12 @@ export default function ConfigurationPanel({
     onConfigChange({ license: licenseValue });
   };
 
+  // Add handleRegionChange function
+  const handleRegionChange = (value: string) => {
+    setCurrentRegion(value);
+    onConfigChange({ region: value });
+  };
+
   // Only render once client-side to prevent hydration mismatch
   if (!isMounted) {
     return (
@@ -334,18 +342,14 @@ export default function ConfigurationPanel({
           <TabsContent value="core" className="space-y-6">
             <div>
               <Label htmlFor="region">AWS Region</Label>
-              <Select
-                value={config.region}
-                onValueChange={(value) => onConfigChange({ region: value })}
-                disabled={isLoading || isRefreshing}
-              >
-                <SelectTrigger id="region" className="w-full">
+              <Select value={config.region} onValueChange={handleRegionChange}>
+                <SelectTrigger>
                   <SelectValue placeholder="Select a region" />
                 </SelectTrigger>
                 <SelectContent>
                   {regions.map((region) => (
-                    <SelectItem key={region.value} value={region.value}>
-                      {region.label}
+                    <SelectItem key={region.code} value={region.code}>
+                      {region.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
