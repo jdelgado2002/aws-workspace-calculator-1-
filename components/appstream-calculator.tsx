@@ -41,6 +41,7 @@ export default function AppStreamCalculator() {
   const [selectedOS, setSelectedOS] = useState<string>('');
   const [selectedMultiSession, setSelectedMultiSession] = useState<string>('false');
   const [usageHours, setUsageHours] = useState<number>(730);
+  const [bufferFactor, setBufferFactor] = useState<number>(0.1); // Add buffer factor state
   const [usersPerInstance, setUsersPerInstance] = useState<number>(1);
   const [numberOfInstances, setNumberOfInstances] = useState<number>(1);
   const [usagePattern, setUsagePattern] = useState<AppStreamUsagePatternType>(DEFAULT_USAGE_PATTERN);
@@ -141,7 +142,7 @@ export default function AppStreamCalculator() {
         usersPerInstance: usersPerInstance,
         numberOfInstances: numberOfInstances,
         userCount: userCount,
-        bufferFactor: 0.1, // Ensure we're explicitly sending the buffer factor
+        bufferFactor: selectedInstanceFunction === 'elasticfleet' ? 0 : bufferFactor, // Ensure we're explicitly sending the buffer factor
         weekdayDaysCount: usagePattern.weekdayDaysCount,
         weekdayPeakHoursPerDay: usagePattern.weekdayPeakHoursPerDay,
         weekdayPeakConcurrentUsers: usagePattern.weekdayPeakConcurrentUsers,
@@ -418,6 +419,36 @@ export default function AppStreamCalculator() {
                       step={1}
                       className="flex-1"
                     />
+                  </div>
+                </div>
+              )}
+
+              {/* Add buffer factor input when not using elastic fleet */}
+              {selectedInstanceFunction != 'elasticfleet' && (
+                <div className="space-y-2">
+                  <Label htmlFor="bufferFactor">Buffer Factor</Label>
+                  <div className="flex items-center space-x-2">
+                    <Input
+                      id="bufferFactor"
+                      type="number"
+                      value={bufferFactor}
+                      onChange={(e) => setBufferFactor(Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)))}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      className="w-20"
+                    />
+                    <Slider
+                      value={[bufferFactor * 100]}
+                      onValueChange={(value) => setBufferFactor(value[0] / 100)}
+                      min={0}
+                      max={100}
+                      step={10}
+                      className="flex-1"
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {bufferFactor * 100}% buffer capacity for scaling
                   </div>
                 </div>
               )}

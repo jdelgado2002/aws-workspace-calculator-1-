@@ -15,7 +15,7 @@ export async function POST(request: Request) {
       numberOfInstances = 1,
       usagePattern = 'always-on',
       userCount = 10,
-      bufferFactor = 0.1, // Default buffer factor
+      bufferFactor = 0.0, // Default to 0 for elastic fleet
       includeWeekends = true,
       // Extract the concurrent user values from the request
       weekdayPeakConcurrentUsers = 80,
@@ -28,8 +28,13 @@ export async function POST(request: Request) {
       weekendPeakHoursPerDay = 4
     } = data;
     
-    // Ensure bufferFactor is properly parsed as a number
-    const parsedBufferFactor = typeof bufferFactor === 'string' ? parseFloat(bufferFactor) : (bufferFactor ?? 0.1);
+    // Ensure bufferFactor is properly parsed as a number and is valid
+    const parsedBufferFactor = Math.min(1, Math.max(0, 
+      typeof bufferFactor === 'string' ? parseFloat(bufferFactor) : (bufferFactor ?? 0)
+    ));
+
+    // Log the buffer factor being used
+    console.log(`Using buffer factor: ${parsedBufferFactor * 100}%`);
     
     if (!region || !instanceType || !instanceFamily || !instanceFunction || !operatingSystem) {
       return NextResponse.json({
@@ -166,7 +171,7 @@ export async function POST(request: Request) {
       const hoursInMonth = 730;
       const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
       totalUtilizedHours = hoursInMonth * concurrentUsers;
-      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
       totalInstanceHours = totalUtilizedHours + totalBufferHours;
 
       calculationDetails = {
@@ -186,7 +191,7 @@ export async function POST(request: Request) {
       const weekdayBusinessHours = weekdayDaysCount * hoursPerDay * weeksPerMonth;
 
       const businessHours = weekdayBusinessHours * Math.min(userCount, weekdayPeakConcurrentUsers);
-      totalBufferHours = businessHours * parsedBufferFactor;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (businessHours * parsedBufferFactor);
       totalUtilizedHours = businessHours;
       totalInstanceHours = businessHours + totalBufferHours;
 
@@ -227,7 +232,7 @@ export async function POST(request: Request) {
       }
 
       totalUtilizedHours = weekdayPeakHours + weekdayOffPeakHours + weekendPeakHours + weekendOffPeakHours;
-      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
       totalInstanceHours = totalUtilizedHours + totalBufferHours;
 
       calculationDetails = {
