@@ -130,6 +130,14 @@ export default function AppStreamCalculator() {
     
     try {
       const bundle = bundles.find(b => b.id === selectedBundle);
+      
+      // Get the instance specs from the already loaded bundle data
+      const instanceSpecs = bundle ? {
+        vcpu: bundle.vcpu,
+        memory: bundle.memory,
+        videoMemory: bundle.videoMemory
+      } : null;
+      
       const params = {
         region: selectedRegion,
         instanceType: selectedBundle,
@@ -142,7 +150,7 @@ export default function AppStreamCalculator() {
         usersPerInstance: usersPerInstance,
         numberOfInstances: numberOfInstances,
         userCount: userCount,
-        bufferFactor: selectedInstanceFunction === 'elasticfleet' ? 0 : bufferFactor, // Ensure we're explicitly sending the buffer factor
+        bufferFactor: selectedInstanceFunction === 'elasticfleet' ? 0 : bufferFactor,
         weekdayDaysCount: usagePattern.weekdayDaysCount,
         weekdayPeakHoursPerDay: usagePattern.weekdayPeakHoursPerDay,
         weekdayPeakConcurrentUsers: usagePattern.weekdayPeakConcurrentUsers,
@@ -150,10 +158,25 @@ export default function AppStreamCalculator() {
         weekendDaysCount: usagePattern.weekendDaysCount,
         weekendPeakHoursPerDay: usagePattern.weekendPeakHoursPerDay, 
         weekendPeakConcurrentUsers: usagePattern.weekendPeakConcurrentUsers,
-        weekendOffPeakConcurrentUsers: usagePattern.weekendOffPeakConcurrentUsers
+        weekendOffPeakConcurrentUsers: usagePattern.weekendOffPeakConcurrentUsers,
+        
+        // Pass the instance specs to avoid redundant API calls
+        instanceSpecs: instanceSpecs
       };
       
       const result = await calculateAppStreamPricing(params);
+      
+      // Log the raw pricing information for debugging
+      console.log('API pricing result:', result);
+      console.log(`AWS hourly rate: $${result.hourlyPrice} per hour`);
+      console.log(`Total hours: ${result.totalInstanceHours}`);
+      console.log(`Expected cost: ${result.totalInstanceHours} × $${result.hourlyPrice} = $${(result.totalInstanceHours * result.hourlyPrice).toFixed(2)}`);
+      console.log(`API returned cost: $${result.instanceCost.toFixed(2)}`);
+      
+      // Check for potential calculation issues
+      if (result.totalInstanceHours === 0 && result.instanceCost === 0) {
+        console.warn('WARNING: Zero hours detected in the calculation response!');
+      }
       
       // Format the response to match PricingEstimate structure for CostSummaryPanel
       const formattedEstimate = {
@@ -162,23 +185,32 @@ export default function AppStreamCalculator() {
         annualEstimate: result.annualCost || 0,
         bundleName: bundle?.name || 'AppStream Bundle',
         billingModel: 'Hourly',
-        baseCost: result.hourlyPrice * 730, // convert hourly to monthly base
+        baseCost: result.hourlyPrice * 730, // Convert hourly to monthly for base reference
         pricingSource: 'aws-api',
         license: selectedOS === 'windows' ? 'included' : 'not-applicable',
-        // Add pool pricing details
+        // Use the exact values from the API response
         poolPricingDetails: {
           userLicenseCost: result.userLicenseCost || 0,
-          activeStreamingCost: result.instanceCost || 0,
+          // Verify that we're using the correct active streaming cost calculation
+          activeStreamingCost: result.instanceCost || (result.hourlyPrice * result.totalInstanceHours),
           stoppedInstanceCost: 0,
-          hourlyStreamingRate: result.hourlyPrice, // Pass through the hourly rate from the API
+          hourlyStreamingRate: result.hourlyPrice,
+          stoppedInstanceRate: 0.03,
           totalInstanceHours: result.totalInstanceHours || 0,
-          utilizedInstanceHours: result.utilizedInstanceHours || 0,
-          bufferInstanceHours: result.bufferInstanceHours || 0,
-          bufferFactor: result.details?.calculationDetails?.bufferFactor || 0.1, // Pass through the buffer factor
+          totalUtilizedHours: result.utilizedInstanceHours || 0,
+          totalBufferHours: result.bufferInstanceHours || 0,
+          originalRate: result.details?.baseInstancePrice || result.hourlyPrice
         },
-        // Include original details for debugging
-        originalDetails: result.details
+        _rawApiResponse: result
       };
+      
+      // Ensure the total monthly cost matches what we expect
+      console.log(`Re-verification in component:
+        Hourly rate × hours = $${(result.hourlyPrice * result.totalInstanceHours).toFixed(2)} 
+        API instance cost = $${result.instanceCost.toFixed(2)}
+        Formatted active cost = $${formattedEstimate.poolPricingDetails.activeStreamingCost.toFixed(2)}
+        Total monthly with license = $${formattedEstimate.totalMonthlyCost.toFixed(2)}
+      `);
       
       setPricingEstimate(formattedEstimate);
     } catch (error) {

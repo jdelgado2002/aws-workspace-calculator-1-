@@ -58,18 +58,19 @@ function calculatePoolCosts(usagePattern: PoolUsagePattern, baseHourlyRate: numb
   // Apply license discount for BYOL
   const isBYOL = license === "bring-your-own-license";
   
-  // Instead of hardcoding rates, use the baseHourlyRate from the API
-  // The API provides the correct rate, so we should use it directly
+  // Important: Use the exact hourly rate from the API without modification
   const ACTIVE_STREAMING_RATE = baseHourlyRate;
-
-  console.log(`Using API-provided streaming rate: ${ACTIVE_STREAMING_RATE}/hr for ${license} license`);
+  
+  console.log(`Using API-provided streaming rate directly: $${ACTIVE_STREAMING_RATE}/hr for ${license} license`);
 
   const STOPPED_INSTANCE_RATE = 0.03; // This rate is fixed per AWS documentation
   const BUFFER_FACTOR = 0.10; // 10% buffer factor as per AWS calculator
   const WEEKS_PER_MONTH = 4.35; // 730 hours / 168 hours = 4.35 weeks per month
   
   // Calculate user license costs - only if using included license
-  const userLicenseCost = license !== "bring-your-own-license" ? LICENSE_COST_PER_USER * userCount : 0;
+  const userLicenseCost = license !== "bring-your-own-license" && license !== "not-applicable" 
+    ? LICENSE_COST_PER_USER * userCount 
+    : 0;
   
   // 2. Calculate weekday usage hours
   const weekdayDays = usagePattern.weekdayDaysCount;
@@ -178,12 +179,20 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   const licenseType = isPool ? (config.poolLicense || "included") : (config.license || "included");
   
   // Calculate base costs - ensure we have a valid base hourly rate
-  // For pool calculations, we'll let the calculatePoolCosts function apply any license discounts
-  const baseHourlyCost = isPool && pricingEstimate
-    ? (pricingEstimate.baseCost / 730) || 0.12 // Convert monthly to hourly with fallback
-    : 0;
+  // For AppStream calculations, we want to use the exact API-provided rate when available
+  let baseHourlyCost = 0;
   
-  console.log(`Base hourly cost: ${baseHourlyCost}, license: ${licenseType}`);
+  if (isPool && pricingEstimate?.poolPricingDetails?.hourlyStreamingRate) {
+    // Use the exact hourly rate from the API for AppStream
+    baseHourlyCost = pricingEstimate.poolPricingDetails.hourlyStreamingRate;
+    console.log(`Using API-provided hourly rate: $${baseHourlyCost}/hr`);
+  } else if (isPool && pricingEstimate) {
+    // Fallback to converting monthly to hourly if needed
+    baseHourlyCost = (pricingEstimate.baseCost / 730) || 0.12;
+    console.log(`Converted monthly to hourly rate: $${baseHourlyCost}/hr`);
+  }
+  
+  console.log(`Final base hourly cost: ${baseHourlyCost}, license: ${licenseType}`);
   
   // Get the total monthly cost from pricing estimate
   const fullMonthlyCost = pricingEstimate?.totalMonthlyCost || 0;
@@ -200,6 +209,21 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
       stoppedInstanceCost: pricingEstimate.poolPricingDetails.stoppedInstanceCost || 0,
       totalInstanceHours: pricingEstimate.poolPricingDetails.totalInstanceHours || 0
     };
+    
+    // Verify the calculation directly in the panel
+    if (pricingEstimate.poolPricingDetails.hourlyStreamingRate && pricingEstimate.poolPricingDetails.totalInstanceHours) {
+      const hourlyRate = pricingEstimate.poolPricingDetails.hourlyStreamingRate;
+      const totalHours = pricingEstimate.poolPricingDetails.totalInstanceHours;
+      const expectedCost = hourlyRate * totalHours;
+      
+      console.log(`Cost Summary Panel Verification:
+        Hours: ${totalHours}
+        Rate: $${hourlyRate}/hr
+        Expected: $${expectedCost.toFixed(2)}
+        Shown: $${poolCosts.activeStreamingCost.toFixed(2)}
+        API Total Monthly: $${pricingEstimate.totalMonthlyCost.toFixed(2)}
+      `);
+    }
   } else if (isPool && config.poolUsagePattern) {
     // Fallback to calculating locally if API data isn't available
     poolCosts = calculatePoolCosts(
@@ -232,10 +256,25 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
   
   // Format percentage
   
+  // Add validation for potential calculation issues
+  const hasCalculationIssue = isPool && 
+    pricingEstimate?.poolPricingDetails && 
+    pricingEstimate.poolPricingDetails.totalInstanceHours === 0;
+  
   return (
     <Card className="h-full shadow-sm">  
       <CardContent className="p-6"> 
         <h2 className="text-xl font-bold text-gray-900 mb-6">Pricing Summary</h2>
+        
+        {/* Show warning if we detect issues with the calculation */}
+        {hasCalculationIssue && (
+          <Alert className="mb-4 bg-amber-50 text-amber-800 border-amber-200">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              There may be an issue with the hour calculations. The results shown might not be accurate.
+            </AlertDescription>
+          </Alert>
+        )}
         
         {/* Show a warning if volume selections weren't honored */}
         {pricingEstimate && !pricingEstimate.volumeSelectionHonored && 
@@ -363,6 +402,20 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                         <span className="text-sm font-medium text-blue-700">Total monthly cost</span>
                         <span className="text-sm font-medium">{formatCurrency(poolCosts.totalMonthlyCost)}</span>
                       </div>
+                      {/* Add additional verification display at the bottom */}
+                      {pricingEstimate?.poolPricingDetails?.hourlyStreamingRate && (
+                        <div className="mt-2 pt-2 border-t border-blue-200 text-xs text-blue-700">
+                          <div className="flex justify-between">
+                            <span>Calculation check:</span>
+                            <span>
+                              {pricingEstimate.poolPricingDetails.totalInstanceHours} hrs × 
+                              ${pricingEstimate.poolPricingDetails.hourlyStreamingRate}/hr = 
+                              ${((pricingEstimate.poolPricingDetails.totalInstanceHours || 0) * 
+                                 (pricingEstimate.poolPricingDetails.hourlyStreamingRate || 0)).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -441,6 +494,20 @@ export default function CostSummaryPanel({ config, pricingEstimate, isLoading, a
                 </>
               )}
             </div>
+
+            {/* Add special debugging for AppStream calculations */}
+            {isPool && config.isAppStream === true && pricingEstimate?.poolPricingDetails && (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-100 rounded-md">
+                <div className="text-xs text-amber-800 font-medium">Pricing Verification</div>
+                <div className="text-xs text-amber-700">
+                  API Rate: ${pricingEstimate.poolPricingDetails.hourlyStreamingRate}/hr<br />
+                  Hours: {Math.round(pricingEstimate.poolPricingDetails.totalInstanceHours || 0)}<br />
+                  Expected: ${((pricingEstimate.poolPricingDetails.hourlyStreamingRate || 0) * 
+                             (pricingEstimate.poolPricingDetails.totalInstanceHours || 0)).toFixed(2)}<br />
+                  Displayed: ${poolCosts.activeStreamingCost.toFixed(2)}
+                </div>
+              </div>
+            )}
           </>
         )}
       </CardContent>

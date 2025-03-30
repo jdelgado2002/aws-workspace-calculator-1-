@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getRegionLabel } from '@/lib/utils';
 
 // This function parses AWS pricing data to extract unique instance types with their specs
 function parseInstanceTypes(data: any, instanceFamily: string, instanceFunction: string) {
@@ -72,7 +73,7 @@ export async function GET(request: Request) {
     }
     
     // Convert region code to region name for AWS API
-    const regionName = getRegionName(region);
+    const regionName = getRegionLabel(region);
     if (!regionName) {
       return NextResponse.json({
         error: "Invalid region code"
@@ -83,11 +84,20 @@ export async function GET(request: Request) {
     
     // Fetch the instance data from AWS
     try {
+      const regionName = getRegionLabel(region);
       const url = `https://calculator.aws/pricing/2.0/meteredUnitMaps/appstream/USD/current/appstream-instances-calc/${encodeURIComponent(regionName)}/primary-selector-aggregations.json`;
-      const response = await fetch(url);
+      
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'AWS-Calculator-Client',
+          'Accept': '*/*',
+          'Referer': 'https://calculator.aws/',
+          'Origin': 'https://calculator.aws'
+        }
+      });
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch data: ${response.status}`);
+        throw new Error(`Failed to fetch pricing data: ${response.status}`);
       }
       
       const data = await response.json();
@@ -109,29 +119,6 @@ export async function GET(request: Request) {
       status: 500
     });
   }
-}
-
-// Helper function to convert region code to AWS region name
-function getRegionName(regionCode: string): string | null {
-  const regionMap: {[key: string]: string} = {
-    'us-east-1': 'US East (N. Virginia)',
-    'us-east-2': 'US East (Ohio)',
-    'us-west-2': 'US West (Oregon)',
-    'ap-northeast-1': 'Asia Pacific (Tokyo)',
-    'ap-southeast-1': 'Asia Pacific (Singapore)',
-    'ap-southeast-2': 'Asia Pacific (Sydney)',
-    'ap-south-1': 'Asia Pacific (Mumbai)',
-    'ap-northeast-2': 'Asia Pacific (Seoul)',
-    'eu-central-1': 'EU (Frankfurt)',
-    'eu-west-1': 'EU (Ireland)',
-    'eu-west-2': 'EU (London)',
-    'ca-central-1': 'Canada (Central)',
-    'sa-east-1': 'South America (Sao Paulo)',
-    'us-gov-west-1': 'AWS GovCloud (US)',
-    'us-gov-east-1': 'AWS GovCloud (US-East)'
-  };
-  
-  return regionMap[regionCode] || null;
 }
 
 // Fallback bundles data if the AWS API fails

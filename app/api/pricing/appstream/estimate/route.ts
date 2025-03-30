@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getRegionLabel } from '@/lib/utils';
 
 export async function POST(request: Request) {
   try {
@@ -25,7 +26,9 @@ export async function POST(request: Request) {
       weekdayDaysCount = 5,
       weekdayPeakHoursPerDay = 8,
       weekendDaysCount = 2,
-      weekendPeakHoursPerDay = 4
+      weekendPeakHoursPerDay = 4,
+      // NEW: Accept instance specifications directly from the client
+      instanceSpecs = null
     } = data;
     
     // Ensure bufferFactor is properly parsed as a number and is valid
@@ -44,8 +47,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // Base pricing data (USD per hour) for US East (N. Virginia)
-    const basePricing = {
+    // Base pricing data (USD per hour) for US East (N. Virginia) 
+    // These values are only used as fallback if AWS API fails
+    const FALLBACK_BASE_PRICING = {
+      // Keep existing hardcoded prices as fallback
       'general-purpose': {
         'stream.standard.small': 0.10,
         'stream.standard.medium': 0.10,
@@ -102,6 +107,276 @@ export async function POST(request: Request) {
         'stream.graphics-design.4xlarge': 2.75
       }
     };
+
+    // Initialize these variables to calculate hours based on usage pattern
+    const weeksPerMonth = 4.35;
+    
+    // IMPORTANT: Define calculationDetails object separately to store usage details
+    const calculationDetails = {
+      pattern: usagePattern,
+      weeksPerMonth,
+      userCount,
+      bufferFactor: parsedBufferFactor
+    };
+    
+    // ===== CALCULATE HOURS BASED ON USAGE PATTERN =====
+    // IMPORTANT: Calculate hours only ONCE and store in these variables
+    let totalUtilizedHours = 0;
+    let totalBufferHours = 0;
+    let totalInstanceHours = 0;
+    
+    // Calculate hours based on the specified usage pattern
+    if (usagePattern === 'always-on') {
+      // Always-on: 24/7 access
+      const hoursInMonth = 730;
+      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalUtilizedHours = hoursInMonth * concurrentUsers;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
+      
+      // Store calculation details
+      Object.assign(calculationDetails, {
+        hoursInMonth,
+        concurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'Always-On (24/7)'
+      });
+    } 
+    else if (usagePattern === 'business-hours') {
+      // Business hours: 8 hours per day, weekdays only
+      const hoursPerDay = 8;
+      const weekdayBusinessHours = weekdayDaysCount * hoursPerDay * weeksPerMonth;
+      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalUtilizedHours = weekdayBusinessHours * concurrentUsers;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
+      
+      // Store calculation details
+      Object.assign(calculationDetails, {
+        weekdayBusinessHours,
+        concurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'Business Hours'
+      });
+    }
+    else if (usagePattern === 'custom') {
+      // Custom pattern: Calculate based on weekday and weekend patterns
+      
+      // Weekday calculations
+      const weekdayPeakHoursPerMonth = weekdayPeakHoursPerDay * weekdayDaysCount * weeksPerMonth;
+      const weekdayOffPeakHoursPerMonth = (24 * weekdayDaysCount * weeksPerMonth) - weekdayPeakHoursPerMonth;
+      const weekdayPeakHours = weekdayPeakHoursPerMonth * Math.min(weekdayPeakConcurrentUsers, userCount);
+      const weekdayOffPeakHours = weekdayOffPeakHoursPerMonth * Math.min(weekdayOffPeakConcurrentUsers, userCount);
+      
+      // Weekend calculations
+      const weekendPeakHoursPerMonth = weekendPeakHoursPerDay * weekendDaysCount * weeksPerMonth;
+      const weekendOffPeakHoursPerMonth = (24 * weekendDaysCount * weeksPerMonth) - weekendPeakHoursPerMonth;
+      const weekendPeakHours = weekendPeakHoursPerMonth * Math.min(weekendPeakConcurrentUsers, userCount);
+      const weekendOffPeakHours = weekendOffPeakHoursPerMonth * Math.min(weekendOffPeakConcurrentUsers, userCount);
+      
+      // Calculate total hours
+      totalUtilizedHours = weekdayPeakHours + weekdayOffPeakHours + weekendPeakHours + weekendOffPeakHours;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
+      
+      // Store calculation details
+      Object.assign(calculationDetails, {
+        weekdayPeakHoursPerMonth,
+        weekdayOffPeakHoursPerMonth,
+        weekendPeakHoursPerMonth,
+        weekendOffPeakHoursPerMonth,
+        weekdayPeakConcurrentUsers: Math.min(weekdayPeakConcurrentUsers, userCount),
+        weekdayOffPeakConcurrentUsers: Math.min(weekdayOffPeakConcurrentUsers, userCount),
+        weekendPeakConcurrentUsers: Math.min(weekendPeakConcurrentUsers, userCount),
+        weekendOffPeakConcurrentUsers: Math.min(weekendOffPeakConcurrentUsers, userCount),
+        weekdayPeakHours,
+        weekdayOffPeakHours,
+        weekendPeakHours,
+        weekendOffPeakHours,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'Custom',
+        includeWeekends
+      });
+    } 
+    else {
+      // Default to simple calculation based on provided hours
+      const estimatedMonthlyHours = usageHours || 730; // Default to 730 hours (average month)
+      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
+      totalUtilizedHours = estimatedMonthlyHours * concurrentUsers;
+      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
+      totalInstanceHours = totalUtilizedHours + totalBufferHours;
+      
+      // Store calculation details
+      Object.assign(calculationDetails, {
+        userSpecifiedHours: estimatedMonthlyHours,
+        concurrentUsers,
+        totalUtilizedHours,
+        totalBufferHours,
+        totalInstanceHours,
+        pattern: 'User Specified'
+      });
+    }
+    
+    // Log the initially calculated hours
+    console.log(`Initial hours calculation: utilized=${totalUtilizedHours}, buffer=${totalBufferHours}, total=${totalInstanceHours}`);
+    
+    // Try to fetch actual pricing from AWS API
+    let baseHourlyPrice;
+    
+    try {
+      const regionName = getRegionLabel(region);
+      
+      // Extract instance specs either from the provided data or fetch from API
+      let vCPU, memory, videoMemory;
+      
+      if (instanceSpecs) {
+        // Use the specs provided by the client
+        console.log('Using instance specs provided by client:', instanceSpecs);
+        vCPU = instanceSpecs.vcpu || instanceSpecs.vCPU;
+        memory = instanceSpecs.memory;
+        videoMemory = instanceSpecs.videoMemory;
+      } else {
+        // Fall back to fetching from the API
+        console.log('No instance specs provided, fetching from API');
+        
+        // First, fetch the instance specs from the aggregation data
+        const aggregationUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/appstream/USD/current/appstream-instances-calc/${encodeURIComponent(regionName)}/primary-selector-aggregations.json`;
+        
+        console.log('Fetching instance specifications from:', aggregationUrl);
+        
+        const aggregationResponse = await fetch(aggregationUrl, {
+          headers: {
+            'User-Agent': 'AWS-Calculator-Client',
+            'Accept': '*/*',
+            'Referer': 'https://calculator.aws/',
+            'Origin': 'https://calculator.aws'
+          }
+        });
+        
+        if (!aggregationResponse.ok) {
+          throw new Error(`Failed to fetch instance specifications: ${aggregationResponse.status}`);
+        }
+        
+        const aggregationData = await aggregationResponse.json();
+        
+        // Find the matching instance details
+        const instanceDetails = aggregationData.aggregations.find(item => 
+          item.selectors["Instance Type"] === instanceType && 
+          item.selectors["Instance Family"] === mapInstanceFamily(instanceFamily) &&
+          item.selectors["Instance Function"] === mapInstanceFunction(instanceFunction) &&
+          item.selectors["Operating System"] === mapOperatingSystem(operatingSystem)
+        );
+        
+        if (!instanceDetails) {
+          throw new Error(`Could not find specifications for ${instanceType} with the given parameters`);
+        }
+        
+        // Extract the specs from the found instance
+        vCPU = instanceDetails.selectors["vCPU"];
+        memory = instanceDetails.selectors["Memory (GiB)"];
+        videoMemory = instanceDetails.selectors["Video Memory (GiB)"];
+      }
+      
+      console.log(`Using instance specs: vCPU=${vCPU}, Memory=${memory}, Video Memory=${videoMemory}`);
+      
+      // Now construct URL with the extracted parameters
+      const urlParams = [
+        encodeURIComponent(regionName),
+        encodeURIComponent(mapInstanceFamily(instanceFamily)),
+        encodeURIComponent(mapInstanceFunction(instanceFunction)),
+        encodeURIComponent(instanceType),
+        encodeURIComponent(vCPU),
+        encodeURIComponent(memory),
+        encodeURIComponent(videoMemory),
+        encodeURIComponent(mapOperatingSystem(operatingSystem))
+      ];
+      
+      const awsPricingUrl = `https://calculator.aws/pricing/2.0/meteredUnitMaps/appstream/USD/current/appstream-instances-calc/${urlParams.join('/')}/index.json`;
+      
+      console.log('Fetching AppStream pricing from:', awsPricingUrl);
+      
+      const response = await fetch(awsPricingUrl, {
+        headers: {
+          'User-Agent': 'AWS-Calculator-Client',
+          'Accept': '*/*',
+          'Referer': 'https://calculator.aws/',
+          'Origin': 'https://calculator.aws'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const regionData = data.regions[regionName];
+        
+        if (regionData) {
+          // Find the matching instance by key components
+          const priceKey = Object.keys(regionData).find(key => {
+            const entry = regionData[key];
+            return entry["Instance Type"] === instanceType &&
+                   entry["Instance Family"] === mapInstanceFamily(instanceFamily) &&
+                   entry["Instance Function"] === mapInstanceFunction(instanceFunction) &&
+                   entry["Operating System"] === mapOperatingSystem(operatingSystem);
+          });
+
+          if (priceKey) {
+            baseHourlyPrice = parseFloat(regionData[priceKey].price);
+            console.log(`Using AWS API pricing: $${baseHourlyPrice}/hr for ${instanceType} from API`);
+            
+            // Log and verify the price calculation with totalInstanceHours
+            console.log(`AWS API price verification: ${totalInstanceHours} hours × $${baseHourlyPrice}/hr = $${(baseHourlyPrice * totalInstanceHours).toFixed(2)}`);
+          } else {
+            throw new Error(`No matching price found for ${instanceType} in ${regionName}`);
+          }
+        } else {
+          throw new Error(`No pricing data found for region ${regionName}`);
+        }
+      } else {
+        throw new Error('AWS Pricing API request failed');
+      }
+    } catch (error) {
+      // Fallback to hardcoded pricing if AWS API fails
+      baseHourlyPrice = FALLBACK_BASE_PRICING[instanceFamily]?.[instanceType];
+      console.log(`Using fallback pricing: $${baseHourlyPrice}/hr for ${instanceType} (${error.message})`);
+    }
+
+    // Add helper functions to map our values to API expected values
+    function mapInstanceFamily(family: string): string {
+      const mapping = {
+        'general-purpose': 'General purpose',
+        'compute-optimized': 'Compute optimized',
+        'memory-optimized': 'Memory optimized',
+        'graphics': 'Graphics',
+        'graphics-pro': 'Graphics Pro',
+        'graphics-g5': 'Graphics G5',
+        'graphics-design': 'Graphics Design'
+      };
+      return mapping[family] || family;
+    }
+
+    function mapInstanceFunction(func: string): string {
+      const mapping = {
+        'fleet': 'Fleet',
+        'imagebuilder': 'ImageBuilder',
+        'elasticfleet': 'ElasticFleet'
+      };
+      return mapping[func] || func;
+    }
+
+    function mapOperatingSystem(os: string): string {
+      const mapping = {
+        'windows': 'Windows',
+        'amazon-linux': 'Amazon Linux',
+        'rhel': 'Red Hat Enterprise Linux',
+        'rocky-linux': 'Rocky Linux'
+      };
+      return mapping[os] || os;
+    }
     
     // Region price multipliers relative to US East (N. Virginia)
     const regionMultipliers = {
@@ -144,9 +419,6 @@ export async function POST(request: Request) {
     // Multi-session discount (if applicable)
     const multiSessionMultiplier = multiSession === 'true' ? 0.8 : 1.0; // 20% discount for multi-session
     
-    // Get base hourly price for the instance
-    const baseHourlyPrice = basePricing[instanceFamily]?.[instanceType] || 0;
-    
     // Apply OS pricing
     const hourlyPriceWithOS = baseHourlyPrice + (osPricing[operatingSystem] || 0);
     
@@ -161,125 +433,19 @@ export async function POST(request: Request) {
     // Apply multi-session modifier if applicable
     const adjustedHourlyPrice = hourlyPriceWithRegion * multiSessionMultiplier;
     
-    // Calculate total based on usage pattern
-    let totalInstanceHours = 0;
-    let totalUtilizedHours = 0;
-    let totalBufferHours = 0;
-    let calculationDetails = {};
+    // CRITICAL CHANGE: Do NOT recalculate or modify totalInstanceHours here!
+    // Instead, use the already calculated values
     
-    if (usagePattern === 'always-on') {
-      const hoursInMonth = 730;
-      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
-      totalUtilizedHours = hoursInMonth * concurrentUsers;
-      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
-      totalInstanceHours = totalUtilizedHours + totalBufferHours;
-
-      calculationDetails = {
-        hoursInMonth,
-        userCount,
-        concurrentUsers,
-        totalUtilizedHours,
-        totalBufferHours,
-        totalInstanceHours,
-        pattern: 'Always-On (24/7)',
-        bufferFactor: parsedBufferFactor
-      };
-    } 
-    else if (usagePattern === 'business-hours') {
-      const weeksPerMonth = 4.35;
-      const hoursPerDay = 8;
-      const weekdayBusinessHours = weekdayDaysCount * hoursPerDay * weeksPerMonth;
-
-      const businessHours = weekdayBusinessHours * Math.min(userCount, weekdayPeakConcurrentUsers);
-      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (businessHours * parsedBufferFactor);
-      totalUtilizedHours = businessHours;
-      totalInstanceHours = businessHours + totalBufferHours;
-
-      calculationDetails = {
-        weeksPerMonth,
-        weekdayBusinessHours,
-        userCount,
-        peakConcurrentUsers: weekdayPeakConcurrentUsers,
-        totalUtilizedHours,
-        totalBufferHours,
-        totalInstanceHours,
-        pattern: 'Business Hours',
-        bufferFactor: parsedBufferFactor
-      };
-    }
-    else if (usagePattern === 'custom') {
-      const weeksPerMonth = 4.35;
-
-      // Weekday calculations
-      const weekdayPeakHoursPerMonth = weekdayPeakHoursPerDay * weekdayDaysCount * weeksPerMonth;
-      const weekdayOffPeakHoursPerMonth = (24 * weekdayDaysCount * weeksPerMonth) - weekdayPeakHoursPerMonth;
-
-      const weekdayPeakHours = weekdayPeakHoursPerMonth * Math.min(weekdayPeakConcurrentUsers, userCount);
-      const weekdayOffPeakHours = weekdayOffPeakHoursPerMonth * Math.min(weekdayOffPeakConcurrentUsers, userCount);
-
-      // Weekend calculations (if included)
-      let weekendPeakHours = 0;
-      let weekendOffPeakHours = 0;
-      let weekendPeakHoursPerMonth = 0;
-      let weekendOffPeakHoursPerMonth = 0;
-
-      if (includeWeekends) {
-        weekendPeakHoursPerMonth = weekendPeakHoursPerDay * weekendDaysCount * weeksPerMonth;
-        weekendOffPeakHoursPerMonth = (24 * weekendDaysCount * weeksPerMonth) - weekendPeakHoursPerMonth;
-
-        weekendPeakHours = weekendPeakHoursPerMonth * Math.min(weekendPeakConcurrentUsers, userCount);
-        weekendOffPeakHours = weekendOffPeakHoursPerMonth * Math.min(weekendOffPeakConcurrentUsers, userCount);
-      }
-
-      totalUtilizedHours = weekdayPeakHours + weekdayOffPeakHours + weekendPeakHours + weekendOffPeakHours;
-      totalBufferHours = instanceFunction === 'elasticfleet' ? 0 : (totalUtilizedHours * parsedBufferFactor);
-      totalInstanceHours = totalUtilizedHours + totalBufferHours;
-
-      calculationDetails = {
-        weeksPerMonth,
-        weekdayPeakHoursPerMonth,
-        weekdayOffPeakHoursPerMonth,
-        weekendPeakHoursPerMonth,
-        weekendOffPeakHoursPerMonth,
-        weekdayPeakConcurrentUsers: Math.min(weekdayPeakConcurrentUsers, userCount),
-        weekdayOffPeakConcurrentUsers: Math.min(weekdayOffPeakConcurrentUsers, userCount),
-        weekendPeakConcurrentUsers: Math.min(weekendPeakConcurrentUsers, userCount),
-        weekendOffPeakConcurrentUsers: Math.min(weekendOffPeakConcurrentUsers, userCount),
-        weekdayPeakHours,
-        weekdayOffPeakHours,
-        weekendPeakHours,
-        weekendOffPeakHours,
-        totalUtilizedHours,
-        totalBufferHours,
-        totalInstanceHours,
-        pattern: 'Custom',
-        includeWeekends,
-        bufferFactor: parsedBufferFactor
-      };
-    } 
-    else {
-      // Default to simple calculation based on provided hours
-      const estimatedMonthlyHours = usageHours || 730; // Default to 730 hours (average month)
-      const concurrentUsers = Math.min(userCount, weekdayPeakConcurrentUsers);
-      totalUtilizedHours = estimatedMonthlyHours * concurrentUsers;
-      totalBufferHours = totalUtilizedHours * parsedBufferFactor;
-      totalInstanceHours = totalUtilizedHours + totalBufferHours;
-      
-      calculationDetails = {
-        userSpecifiedHours: estimatedMonthlyHours,
-        concurrentUsers,
-        totalUtilizedHours,
-        totalBufferHours,
-        totalInstanceHours,
-        pattern: 'User Specified',
-        bufferFactor: parsedBufferFactor
-      };
-    }
-    
-    // Calculate costs
-    const instanceCost = totalInstanceHours * adjustedHourlyPrice;
+    // Ensure we use the exact hourly rate from the API without any rounding
+    // This is critical for matching AWS's pricing calculations
+    const instanceCost = totalInstanceHours * baseHourlyPrice;
     const userLicenseCost = userCount * userLicenseCostPerMonth;
     const totalMonthlyCost = instanceCost + userLicenseCost;
+    
+    // Log the final calculation to verify
+    console.log(`Final calculation: ${totalInstanceHours} hours × $${baseHourlyPrice}/hr = $${instanceCost.toFixed(2)}`);
+    console.log(`With user license cost: $${userLicenseCost.toFixed(2)}`);
+    console.log(`Total monthly cost: $${totalMonthlyCost.toFixed(2)}`);
     
     // Calculate per user costs
     const effectiveUserCount = userCount > 0 ? userCount : 1;
@@ -293,7 +459,7 @@ export async function POST(request: Request) {
     const threeYearReservedSavings = annualCost * 0.60; // ~40% savings
     
     return NextResponse.json({
-      hourlyPrice: adjustedHourlyPrice,
+      hourlyPrice: baseHourlyPrice, // Use the exact API price, not adjustedHourlyPrice
       totalInstanceHours: totalInstanceHours,
       instanceCost: instanceCost,
       userLicenseCost: userLicenseCost,
