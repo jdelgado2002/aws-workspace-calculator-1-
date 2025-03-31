@@ -3,7 +3,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Aufsite',
-  description: 'Aufsite AWS WorkSpaces Pricing Calculator',
+  description: 'AWS EUC Pricing Calculator',
   generator: 'v0.dev',
 }
 
